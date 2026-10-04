@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>PiRick</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/"><img src="/static/icon.svg" width="30" height="30" alt=""><span>PiRick</span></a>
+      <nav class="actions" aria-label="Menu">
+        <button type="button" id="btn-downloads">Downloads</button>
+        <button type="button" id="btn-new">New chat</button>
+        <button type="button" id="btn-admin" hidden>Admin</button>
+        <button type="button" id="btn-account">Account</button>
+      </nav>
+    </header>
+
+    <main id="chat" class="chat">
+      <div id="setup-notice" class="notice" hidden>
+        <span>PiRick can't download anything yet: no libraries are set up.</span>
+        <button type="button" id="btn-setup" class="primary">Set up libraries</button>
+      </div>
+      <section id="welcome" class="welcome" hidden>
+        <img src="/static/icon.svg" width="64" height="64" alt="">
+        <h1 id="welcome-title">What would you like to watch?</h1>
+        <p class="muted">Tell me the name of a movie, show, anime, album or book. I'll find it and download it, and it will show up in Plex when it's ready.</p>
+        <div class="suggestions">
+          <button type="button" data-fill="Can you get the movie ">Get a movie</button>
+          <button type="button" data-fill="I'd like season 1 of ">Get a TV season</button>
+          <button type="button" data-fill="What's downloading right now?">Check my downloads</button>
+        </div>
+      </section>
+      <div id="messages" class="messages" role="log" aria-live="polite"></div>
+      <div id="working" class="working" role="status" hidden>
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span id="working-text">Thinking…</span>
+      </div>
+    </main>
+
+    <form id="composer" class="composer" method="post" autocomplete="off">
+      <textarea id="input" rows="1" maxlength="2000" placeholder="Ask for a movie, show, album…" aria-label="Message" required></textarea>
+      <button type="submit" id="send" class="primary">Send</button>
+    </form>
+  </div>
+
+  <dialog id="dlg-downloads" aria-labelledby="downloads-title">
+    <div class="sheet">
+      <header class="sheet-head">
+        <h2 id="downloads-title">Downloads</h2>
+        <button type="button" class="close" data-close aria-label="Close">&times;</button>
+      </header>
+      <label id="dl-all-wrap" class="check" hidden><input type="checkbox" id="dl-all"> Show everyone's</label>
+      <p id="dl-empty" class="muted" hidden>Nothing here yet. Ask PiRick for something!</p>
+      <p id="dl-error" class="form-note bad" role="alert" hidden></p>
+      <ul id="dl-list" class="downloads"></ul>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-account" aria-labelledby="account-title">
+    <div class="sheet">
+      <header class="sheet-head">
+        <h2 id="account-title">Account</h2>
+        <button type="button" class="close" data-close aria-label="Close">&times;</button>
+      </header>
+      <p class="muted">Signed in as <strong id="me-name"></strong></p>
+      <form id="password-form" class="stack" method="post">
+        <h3>Change password</h3>
+        <label>Current password
+          <input type="password" name="currentPassword" autocomplete="current-password" maxlength="128" required>
+        </label>
+        <label>New password
+          <input type="password" name="newPassword" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </label>
+        <p id="password-note" class="form-note" role="status" hidden></p>
+        <button type="submit" class="primary">Update password</button>
+      </form>
+      <button type="button" id="btn-logout" class="danger">Sign out</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-admin" aria-labelledby="admin-title">
+    <div class="sheet">
+      <header class="sheet-head">
+        <h2 id="admin-title">Admin</h2>
+        <button type="button" class="close" data-close aria-label="Close">&times;</button>
+      </header>
+
+      <div class="tabs" role="tablist" aria-label="Admin sections">
+        <button type="button" role="tab" id="tabbtn-connections" data-tab="connections" aria-controls="tab-connections" aria-selected="true">Connections</button>
+        <button type="button" role="tab" id="tabbtn-libraries" data-tab="libraries" aria-controls="tab-libraries" aria-selected="false">Libraries</button>
+        <button type="button" role="tab" id="tabbtn-personality" data-tab="personality" aria-controls="tab-personality" aria-selected="false">Personality</button>
+        <button type="button" role="tab" id="tabbtn-people" data-tab="people" aria-controls="tab-people" aria-selected="false">People</button>
+      </div>
+
+      <section id="tab-connections" role="tabpanel" aria-labelledby="tabbtn-connections">
+        <div class="section-head">
+          <p class="muted">Whether PiRick can reach each service.</p>
+          <button type="button" id="btn-recheck">Check again</button>
+        </div>
+        <ul id="status-list" class="status-list"></ul>
+      </section>
+
+      <section id="tab-libraries" role="tabpanel" aria-labelledby="tabbtn-libraries" hidden>
+        <p class="muted">Where downloads are saved. PiRick only ever saves into the folders listed here, and chooses between them from your description of each.</p>
+        <p id="library-empty" class="form-note bad" hidden>No libraries yet. Nothing can be downloaded until you add one.</p>
+        <ul id="library-list" class="library-list"></ul>
+        <form id="library-form" class="stack" method="post" autocomplete="off">
+          <h4 id="library-form-title">Add a library</h4>
+          <label>Name
+            <input name="name" maxlength="40" placeholder="Anime" required>
+          </label>
+          <label>What goes here
+            <input name="description" maxlength="200" placeholder="Japanese animated series and films">
+          </label>
+          <label>Folder, exactly as qBittorrent sees it
+            <input name="savePath" list="folder-options" maxlength="500" placeholder="/media/Anime" spellcheck="false" autocapitalize="none" required>
+          </label>
+          <datalist id="folder-options"></datalist>
+          <label class="check"><input type="checkbox" name="perTitle"> Give each show its own subfolder</label>
+          <label>qBittorrent category (optional)
+            <input name="category" maxlength="60" spellcheck="false">
+          </label>
+          <p id="library-note" class="form-note" role="status" hidden></p>
+          <div class="row-actions">
+            <button type="submit" class="primary" id="library-submit">Add library</button>
+            <button type="button" id="library-cancel" hidden>Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="tab-personality" role="tabpanel" aria-labelledby="tabbtn-personality" hidden>
+        <p class="muted">Describe how PiRick should sound. This changes its voice, not what it does. Leave it empty for the friendly default.</p>
+        <form id="personality-form" class="stack" method="post">
+          <textarea name="personality" rows="6" maxlength="1000" aria-label="Personality" placeholder="For example: a cheerful pirate captain who calls everyone matey."></textarea>
+          <div class="presets">
+            <span class="muted">Try:</span>
+            <button type="button" data-preset="pirate">Pirate captain</button>
+            <button type="button" data-preset="butler">Posh butler</button>
+            <button type="button" data-preset="clerk">Grumpy video-store clerk</button>
+            <button type="button" data-preset="buff">Over-excited film buff</button>
+          </div>
+          <p id="personality-note" class="form-note" role="status" hidden></p>
+          <button type="submit" class="primary">Save personality</button>
+        </form>
+      </section>
+
+      <section id="tab-people" role="tabpanel" aria-labelledby="tabbtn-people" hidden>
+        <ul id="user-list" class="user-list"></ul>
+        <form id="user-form" class="stack" method="post" autocomplete="off">
+          <h4>Add someone</h4>
+          <label>Username
+            <input name="username" autocapitalize="none" spellcheck="false" maxlength="32" required>
+          </label>
+          <label>Password
+            <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+          </label>
+          <label>Role
+            <select name="role">
+              <option value="user">Member: can ask for things</option>
+              <option value="admin">Admin: can also manage PiRick</option>
+            </select>
+          </label>
+          <p id="user-note" class="form-note" role="status" hidden></p>
+          <button type="submit" class="primary">Add</button>
+        </form>
+      </section>
+    </div>
+  </dialog>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

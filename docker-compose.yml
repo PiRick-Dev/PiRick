@@ -1,0 +1,26 @@
+services:
+  pirick:
+    build: .
+    image: pirick:latest
+    container_name: pirick
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Point your reverse proxy at this port. If the proxy runs on this same
+      # machine, use "127.0.0.1:8787:8080" so PiRick is only reachable through it.
+      - "8787:8080"
+    volumes:
+      - pirick-data:/data
+    extra_hosts:
+      # Lets PiRick reach services published on the Docker host (needed on Linux).
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pirick-data:
