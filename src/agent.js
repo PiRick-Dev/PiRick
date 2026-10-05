@@ -85,7 +85,11 @@ Write them a short welcome-back message that tells them what happened.
 ${voiceSection(personality)}`;
 }
 
-function nudge(request, claimed) {
+function nudge(request, claimed, failed) {
+  // Another download call cannot fix a download that was refused, so do not ask for one.
+  if (failed) {
+    return `[Automatic check, not written by the user] Your last message was not shown to the user because it said something is downloading, but the download tool reported a failure, so that is not true. Do not repeat the call that failed. Tell the user plainly what could not be downloaded and what the tool said about why, without saying that anything is downloading.`;
+  }
   const problem = claimed
     ? 'it said something is downloading, but no download call succeeded in this turn, so that is not true yet'
     : 'you stopped before finishing: you searched, but then neither downloaded anything nor asked the user anything';
@@ -189,7 +193,9 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep }) {
         const canUseTools = step < MAX_TOOL_STEPS;
         // Until a download or a progress check has happened, a reply could be a
         // false claim, so it is held back and checked instead of being streamed.
-        const hold = canUseTools && !turn.succeeded && !turn.listed;
+        // That holds when the tools have been withheld too: a model that used up
+        // its tool rounds on a download that kept failing is the likeliest to claim.
+        const hold = !turn.succeeded && !turn.listed;
         const reply = await ollama.chat({
           messages,
           tools: canUseTools ? definitions : undefined,
@@ -207,19 +213,21 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep }) {
         if (!reply.tool_calls?.length) {
           const original = reply.content;
           if (hold && endedWithoutActing(turn, reply.content, nudges)) {
-            log.warn('withheld a reply that ended the turn without acting', {
-              user: user.username,
-              reply: reply.content.slice(0, 200),
-            });
-            if (nudges < MAX_NUDGES) {
+            const claimed = CLAIM.test(reply.content);
+            if (canUseTools && nudges < MAX_NUDGES) {
+              log.warn('withheld a reply that ended the turn without acting', { user: user.username, reply: reply.content.slice(0, 200) });
               // The withheld reply and the nudge are never shown or stored.
               nudges += 1;
-              messages.push({ role: 'user', content: nudge(text, CLAIM.test(reply.content)) });
+              messages.push({ role: 'user', content: nudge(text, claimed, turn.failed) });
               continue;
             }
-            // Still claiming after being corrected: say what is true instead, so
+            // Out of chances and still claiming: say what is true instead, so
             // neither the user nor the stored history is told something false.
-            reply.content = STUCK_REPLY;
+            // A reply that claims nothing stands.
+            if (claimed) {
+              log.warn('replaced a reply that claimed a download which did not happen', { user: user.username, reply: reply.content.slice(0, 200) });
+              reply.content = STUCK_REPLY;
+            }
           }
           if (!reply.content.trim()) reply.content = EMPTY_REPLY;
           if (hold || reply.content !== original) emit({ type: 'delta', text: reply.content });

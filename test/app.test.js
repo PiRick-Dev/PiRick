@@ -152,6 +152,18 @@ async function ollamaHandler(req, res) {
     else if (last.tool_name === 'search_media') say({ content: "I've started downloading it." });
     else if (last.role === 'user') call('download', { result_id: firstResult(), library: 'TV', title: 'Big Buck Bunny' });
     else say({ content: 'Now it really is downloading.' });
+  } else if (asked.includes('relentless')) {
+    // Retries a download that cannot work for as long as it has tools, then claims it worked.
+    if (last.role === 'user' && !nudged) call('search_media', { query: 'big buck bunny' });
+    else if (body.tools) call('download', { result_id: firstResult(), ...DOWNLOAD_ARGS.kids });
+    else say({ content: 'It is downloading.' });
+  } else if (asked.includes('hopeful')) {
+    // Claims a download that was refused, and owns up only when told it failed.
+    if (last.role === 'user' && !nudged) call('search_media', { query: 'big buck bunny' });
+    else if (last.tool_name === 'search_media') call('download', { result_id: firstResult(), ...DOWNLOAD_ARGS.kids });
+    else if (last.tool_name === 'download') say({ content: "I've started downloading it." });
+    else if (/reported a failure.*Do not repeat/s.test(last.content)) say({ content: 'Sorry, that could not be downloaded.' });
+    else call('download', { result_id: firstResult(), ...DOWNLOAD_ARGS.kids });
   } else if (asked.includes('stubborn')) {
     // Keeps claiming a download no matter what.
     if (last.role === 'user' && !nudged) call('search_media', { query: 'big buck bunny' });
@@ -619,6 +631,18 @@ test('an unknown library, or one whose folder is missing, downloads nothing', as
   assert.equal(missing.statuses.at(-1).text, "Not downloaded: the Kids library's folder does not exist (/media/Kids)");
   assert.match(missing.toolResult().error, /not set up correctly/);
   assert.equal(missing.shown, 'That did not work out.');
+
+  // Told that the download failed, a model that claimed otherwise is not sent to try it again.
+  const hopeful = await chat('a hopeful model for the kids');
+  assert.equal(hopeful.shown, 'Sorry, that could not be downloaded.');
+  assert.equal(hopeful.statuses.filter((status) => status.kind === 'error').length, 1, 'the download was tried once');
+
+  // A model that spends every tool round on it cannot then slip a claim through.
+  const relentless = await chat('a relentless model for the kids');
+  assert.match(relentless.shown, /didn't actually start anything/);
+  assert.equal(relentless.shown.includes('It is downloading.'), false);
+  const stored = JSON.stringify((await getJson('/api/chat')).messages);
+  assert.equal(stored.includes('It is downloading.'), false);
 
   assert.equal(seen.added.length, before);
   assert.equal((await request('/api/admin/libraries/4', { method: 'DELETE' })).status, 200);
