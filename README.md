@@ -50,7 +50,7 @@ The URLs in `.env` are used from inside the PiRick container.
 | In a container on the same Docker network as PiRick | `http://<container-name>:<port>` (add that network to `docker-compose.yml`) |
 | On another machine | `http://<ip-or-hostname>:<port>` |
 
-On Linux, Ollama listens only on `127.0.0.1` by default. Set `OLLAMA_HOST=0.0.0.0` for the Ollama service so containers can reach it.
+On Linux, Ollama listens only on `127.0.0.1` by default, where containers cannot reach it. Ollama has no login of its own, so anyone who can reach its port can use it. If it runs on the same machine as PiRick, set `OLLAMA_HOST` for the Ollama service to the Docker bridge address (usually `172.17.0.1`), so only containers on that machine can reach it. If it runs on another machine it needs `OLLAMA_HOST=0.0.0.0`; add a firewall rule there that lets only the PiRick machine reach port 11434.
 
 ## Running it on another machine from a registry
 
@@ -295,6 +295,7 @@ What it does not do:
 
 - No two-factor login and no self-service sign-up or password recovery. Admins reset passwords.
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
+- An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
 - `.env` holds your Jackett key and qBittorrent password in plain text. Keep the file private; it is excluded from git and from the Docker image.
 
 ## Managing people
