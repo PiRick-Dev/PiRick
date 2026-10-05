@@ -116,7 +116,7 @@ A typical setup is three libraries: Movies (no subfolders), TV and Anime (a subf
 
 This works well for a show's later seasons and for alternative titles the assistant recognises. It cannot know that two completely different names are the same show. When that happens the chat says `(new folder)`, and you can move the download to the right folder in qBittorrent.
 
-Every download PiRick adds is tagged `pirick` and `pirick-<username>` in qBittorrent, so you can see who asked for what.
+Every download PiRick adds is tagged `pirick` and `pirick-<username>` in qBittorrent, so you can see who asked for what. If someone asks for something that is already in qBittorrent and was not added by PiRick, it only gets the `pirick-<username>` tag. It shows in that person's downloads, but PiRick does not treat it as its own: upkeep leaves it alone, and it is not listed under **Show everyone's**.
 
 ## How searching works
 

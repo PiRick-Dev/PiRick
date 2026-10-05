@@ -315,6 +315,14 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
   }
 
   /**
+   * Notes that this person wants a torrent qBittorrent already has. The pirick
+   * tag itself is only ever set when PiRick adds a torrent, so one that was
+   * added by hand never comes under upkeep, which replaces what it looks
+   * after and deletes the copy that stalled.
+   */
+  const alsoWanted = (hash, tags) => qbit.addTags(hash, tags.filter((tag) => tag !== BASE_TAG));
+
+  /**
    * Hands one release to qBittorrent unless it is already there. Resolves to
    * the existing torrent (as `qbit.find` gives it) or null when it was added.
    */
@@ -333,7 +341,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         return null;
       }
     }
-    await qbit.addTags(hash, target.tags);
+    await alsoWanted(hash, target.tags);
     return existing;
   }
 
@@ -598,7 +606,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         // Known up front for magnets; checked before any question about folders.
         const known = result.infoHash ? await qbit.find(result.infoHash) : null;
         if (known) {
-          await qbit.addTags(result.infoHash, tags);
+          await alsoWanted(result.infoHash, tags);
           return alreadyThere(known);
         }
 

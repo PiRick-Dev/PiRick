@@ -772,6 +772,23 @@ test('downloads show only your own unless an admin asks for everyone', async () 
   assert.deepEqual(everyone.downloads.map((item) => item.status), ['downloading', 'finished']);
 });
 
+test('asking for something added by hand does not hand it over to upkeep', async () => {
+  // Already in qBittorrent, half done, and nothing to do with PiRick.
+  const byHand = { hash: '0123456789abcdef0123456789abcdef01234567', name: 'Big.Buck.Bunny.2008.1080p', progress: 0.5, state: 'stalledDL', size: 2e9, tags: 'private' };
+  seen.torrents.push(byHand);
+  const before = seen.added.length;
+
+  const { statuses, toolResult } = await chat('Can you get Big Buck Bunny?');
+  assert.equal(statuses.at(-1).text, 'Already downloading: Big.Buck.Bunny.2008.1080p');
+  assert.equal(toolResult().already_have_it, true);
+  assert.equal(seen.added.length, before, 'nothing new was added');
+  // The person is noted as wanting it, but it is not marked as one of PiRick's
+  // own, which upkeep would replace and delete if it stalled.
+  assert.deepEqual(seen.tagged.at(-1), { hashes: byHand.hash, tags: 'pirick-admin' });
+
+  seen.torrents = seen.torrents.filter((torrent) => torrent !== byHand);
+});
+
 test('a stuck download is replaced, and its owner is told in PiRick’s voice on their return', async () => {
   const run = async () => (await request('/api/admin/upkeep/run', { method: 'POST' })).json();
   const stalled = { progress: 0, completed: 0, state: 'stalledDL', size: 1e9, added_on: 1500000000, tags: 'pirick, pirick-admin', category: '' };
