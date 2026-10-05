@@ -250,7 +250,12 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
       const downloads = await qbit.list(everyone ? BASE_TAG : userTag(req.user.username));
       const stuck = upkeep.stuckHashes();
       res.json({
-        downloads: downloads.slice(0, 100).map(({ hash, ...item }) => (stuck.has(hash) ? { ...item, status: 'stuck', etaSeconds: null } : item)),
+        downloads: downloads.slice(0, 100).map(({ hash, requestedBy, ...item }) => ({
+          ...item,
+          ...(stuck.has(hash) && { status: 'stuck', etaSeconds: null }),
+          // Who asked for what is only for an admin looking at everyone's.
+          ...(everyone && { requestedBy }),
+        })),
       });
     } catch (err) {
       log.warn('downloads unavailable', { error: describeError(err) });

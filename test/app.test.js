@@ -765,11 +765,13 @@ test('downloads show only your own unless an admin asks for everyone', async () 
   assert.deepEqual(mine.downloads.map((item) => item.name), ['Big Buck Bunny']);
   assert.deepEqual(
     { ...mine.downloads[0], addedAt: undefined },
-    { name: 'Big Buck Bunny', status: 'downloading', progress: 42.5, size: '1.9 GB', etaSeconds: 600, addedAt: undefined, requestedBy: ['admin'] },
+    { name: 'Big Buck Bunny', status: 'downloading', progress: 42.5, size: '1.9 GB', etaSeconds: 600, addedAt: undefined },
   );
 
   const everyone = await getJson('/api/downloads?all=1');
   assert.deepEqual(everyone.downloads.map((item) => item.status), ['downloading', 'finished']);
+  // Who asked for what is only said to an admin looking at everyone's.
+  assert.deepEqual(everyone.downloads.map((item) => item.requestedBy), [['admin'], ['sam']]);
 });
 
 test('asking for something added by hand does not hand it over to upkeep', async () => {
@@ -880,6 +882,7 @@ test('admins manage people; members cannot manage anything', async () => {
   // ?all=1 is ignored for members.
   const samDownloads = await getJson('/api/downloads?all=1', { cookie: samCookie });
   assert.deepEqual(samDownloads.downloads.map((item) => item.name), ['Sintel']);
+  assert.equal('requestedBy' in samDownloads.downloads[0], false, 'members are not told who else asked for something');
 
   const reset = await request(`/api/admin/users/${sam.id}/password`, { method: 'POST', body: { password: 'new-sams-password' } });
   assert.equal(reset.status, 200);

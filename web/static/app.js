@@ -278,7 +278,7 @@ function downloadRow(item, everyone) {
   if (status !== 'finished') details.push(`${item.progress}%`);
   details.push(item.size);
   if (item.etaSeconds != null) details.push(timeLeft(item.etaSeconds));
-  if (everyone && item.requestedBy.length) details.push(`for ${item.requestedBy.join(', ')}`);
+  if (everyone && item.requestedBy?.length) details.push(`for ${item.requestedBy.join(', ')}`);
   return h(
     'li',
     { class: `download ${status}` },
