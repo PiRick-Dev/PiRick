@@ -79,6 +79,19 @@ test('a model that checks first and then follows through passes, and is counted 
   assert.equal(dithering.trace.turns[0].confirmations, 1, 'yes is said once');
 });
 
+test('a question about folders, asked after trying to download, is answered too', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'similar-folder');
+  const [find, attempt, retry, done] = scenario.ideal;
+  const question = () => ({ role: 'assistant', content: 'You already have a folder called Tales of Ossendale. Is that the same show?' });
+  const result = await run(scenario, [find, attempt, question, retry, done]);
+  assert.deepEqual(failed(result), []);
+  assert.equal(result.trace.turns[0].answered, 'No, that is a different show.');
+  // Left at the question, the same run counts as unfinished.
+  const stopped = await run(scenario, [find, attempt, question, question]);
+  assert.equal(stopped.trace.turns[0].confirmations, 1, 'the answer is given once');
+  assert.equal(stoppedAtQuestion(scenario, { turns: [{ ...stopped.trace.turns[0], answered: undefined, confirmations: 0 }], added: [] }), true);
+});
+
 test('no yes is given where the question is the point', async () => {
   const scenario = SCENARIOS.find((entry) => entry.id === 'ambiguous-film');
   const result = await run(scenario, scenario.ideal);

@@ -213,7 +213,23 @@ location / {
 
 ## Choosing a model
 
-`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. PiRick was developed with `gemma4:e4b`, which is the default.
+`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. The default is `gemma4:e4b`, because it runs in under 5 GB of graphics memory. If you have 12 GB or more, `gemma4:12b` does the job better: set `OLLAMA_MODEL=gemma4:12b`.
+
+What the comparison found (October 2026, Ollama 0.35.1, a 16 GB Radeon RX 6950 XT; see "Comparing models" for how it works):
+
+| Model | Did the right thing | Critical failures | Typical wait | Graphics memory | In short |
+|---|---|---|---|---|---|
+| `gemma4:12b` | 94% | none in 180 | 7.7 s | 8.9 GB | The best that fits a 16 GB card. It often announces a download before making it, which PiRick catches at the cost of a few seconds. |
+| `gemma4:e4b` | 88% | 1 in 180 | 8.5 s | 4.4 GB | The default. Weaker when a title is unfamiliar or a judgement is called for, and once took an advert for the film. |
+| `ornith:9b` | 86% | 2 in 180 | 6.1 s | 5.2 GB | Steadiest speed, but twice picked one of two shows with the same name without asking. |
+| `granite4.1:8b` | 78% | 1 in 180 | 2.7 s | 6.2 GB | Fastest. Lists options with technical details, and once said it had cancelled a download, which PiRick cannot do. |
+| `qwen3.8:27b` | 94% | none in 72 | 26 s | 12.8 GB and part on the CPU | As good as `gemma4:12b`, at three times the wait and nearly all of the graphics card. |
+
+Three things held across models:
+
+- **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by more than half but costs accuracy: `gemma4:e4b` fell from 88% to 67% and `gemma4:12b` from 94% to 86%. Without thinking, `gemma4:12b` also said it had started two seasons when it had fetched one.
+- **Avoid "abliterated" builds.** The abliterated `gemma4:e4b` scored 74% against 88% for the normal build. It took the advert for the film both times it was offered, and claimed to have cancelled a download.
+- **Bigger is not better by itself.** A 24B Mistral scored 72% at 22 seconds a request.
 
 Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
 
@@ -240,6 +256,7 @@ Things to know:
 - It reads `OLLAMA_URL` and `OLLAMA_NUM_CTX` from `.env`. Models must already be pulled.
 - While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded are repeated.
 - Speed is the model's alone, because the stand-in indexer answers instantly. On a real setup add the time of each search.
+- On a machine with two graphics adapters, Ollama can load a model onto the weaker one, where it runs dozens of times slower. The benchmark refuses a model whose loading takes hardly any dedicated graphics memory; `--force` runs it anyway.
 - Scenarios, their checks and the stand-in indexer's contents are in `bench/scenarios.js` and `bench/corpus.js`. `npm test` proves every scenario can be passed and that known mistakes are caught.
 
 ## Settings
@@ -316,6 +333,7 @@ The database (accounts, sessions, chat history, libraries, personality and upkee
 | qBittorrent: "temporarily banned" | Too many failed logins. Fix the password, then wait or restart qBittorrent. |
 | Searches find nothing | Check **Admin > Connections** for failing indexers, and that the same search works in Jackett's own page. If it worked a moment ago, an indexer may be throttling: see "How searching works". |
 | A search took half a minute | Normal behind FlareSolverr, where each search takes 10 to 20 seconds and a second spelling doubles it. The chat shows which spelling is being searched. |
+| Replies that took seconds now take minutes | On a machine with both integrated graphics and a graphics card, Ollama may have loaded the model onto the integrated one. Its log says which (`using device …`). Restarting Ollama moves it back; disabling the integrated adapter, or updating the graphics driver, stops it happening. |
 | A show came down as many single episodes | No pack with enough seeders was found. The grey "Found …" line in the chat says what PiRick chose. |
 | A download has sat at the same point for days | Check **Admin > Upkeep**: it shows whether the item is stuck and why it was not replaced (no other copy, already replaced three times, or its name could not be read). |
 | Many downloads are "queued" and never start | qBittorrent's queue limit, with dead downloads holding the active slots. See "Upkeep: stuck downloads". |

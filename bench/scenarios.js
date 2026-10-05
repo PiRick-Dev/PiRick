@@ -11,6 +11,8 @@
 //   checks   (trace) => [{ name, pass, critical }], judged on what happened
 //   ideal    a script of model replies that passes every check, which proves
 //            the scenario can be solved with the tools as they are
+//   ifAsked  optionally, what the user answers when PiRick asks something after a
+//            download attempt, such as whether two folders are the same show
 //   bad      optionally, a script that must fail the named check
 //
 // Checks look at what reached qBittorrent and which tools were called. Wording
@@ -235,7 +237,7 @@ export const SCENARIOS = [
     id: 'described-version',
     group: 'Films',
     title: 'Which of several films is clear from the description',
-    turns: ["I'd like Dr. Jekyll and Mr. Hyde, the silent one with John Barrymore."],
+    turns: ["I'd like Dr. Jekyll and Mr. Hyde, the one with John Barrymore."],
     checks: (t) => [got(t, 'the 1920 film', [/^Dr\.Jekyll\.and\.Mr\.Hyde\.1920\./]), sensible(t)],
     ideal: film('Dr Jekyll and Mr Hyde 1920', /\.1920\.1080p/, 'I picked Dr. Jekyll and Mr. Hyde (1920) in 1080p and saved it in Movies. It will show up in Plex when it finishes.'),
   },
@@ -303,6 +305,7 @@ export const SCENARIOS = [
     group: 'Shows',
     title: 'Show already has a folder under its French name',
     turns: ['Can you get season 1 of The Vampires, the French serial from 1915?'],
+    ifAsked: 'Yes, that is the same serial.',
     checks: (t) => [
       got(t, 'the right season', [/^The\.Vampires\.1915\.S01\.1080p/], { ok: /Vampires/ }),
       saved(t, 'reused the folder it already has', '/media/TV/Les Vampires'),
@@ -320,6 +323,7 @@ export const SCENARIOS = [
     group: 'Shows',
     title: 'A similar-looking folder that is a different show',
     turns: ['Get me season 1 of Tales of the Kestrel.'],
+    ifAsked: 'No, that is a different show.',
     checks: (t) => [
       got(t, 'the right season', [/^Tales\.of\.the\.Kestrel\.S01\.1080p/], { ok: /^Tales\.of\.the\.Kestrel\.S01/ }),
       saved(t, 'made its own folder', '/media/TV/Tales of the Kestrel'),
@@ -563,7 +567,12 @@ export const SCENARIOS = [
     turns: ['Can you get Caminandes: Llama Drama?', 'And the sequel too, please.'],
     checks: (t) => [
       got(t, 'the first film', [/^Caminandes\.1\.Llama\.Drama\./], { turn: 0 }),
-      got(t, 'the sequel', [/^Caminandes\.2\.Gran\.Dillama\./], { turn: 1 }),
+      // Fetching the first film late, along with the sequel, is not a wrong download.
+      check(
+        'the sequel',
+        titles(t, 1).filter((title) => /^Caminandes\.2\.Gran\.Dillama\./.test(title)).length === 1 && titles(t, 1).every((title) => /^Caminandes\.[12]\./.test(title)),
+        titles(t, 1).some((title) => !/^Caminandes\.[12]\./.test(title)),
+      ),
       sensible(t, 1080, 1),
     ],
     ideal: [
@@ -639,13 +648,21 @@ export function judge(scenario, trace) {
 /** What the user says when PiRick checks before acting. */
 export const YES = 'Yes please. Go with what I asked for, and pick whichever copy you think is best.';
 
-/** True when PiRick answered a request by asking something, without having tried a download. */
-const askedFirst = (turn, said) =>
-  typeof turn === 'string' && asksSomething(said.reply) && !said.stuck && !said.blank && !said.calls.some((entry) => entry.name === 'download');
+/**
+ * What the user says back to PiRick's latest reply, or null to leave it there.
+ * A question asked before any download attempt gets a yes, once. A question
+ * asked after an attempt that downloaded nothing gets the scenario's own answer,
+ * once, if it has one.
+ */
+function nextAnswer(scenario, turn, said, downloaded) {
+  if (typeof turn !== 'string' || !asksSomething(said.reply) || said.stuck || said.blank) return null;
+  if (!said.calls.some((entry) => entry.name === 'download')) return said.confirmations ? null : YES;
+  return scenario.ifAsked && !downloaded && said.answered !== scenario.ifAsked ? scenario.ifAsked : null;
+}
 
 /** Whether a saved run stopped at a question that the user would now answer. Such runs are played again. */
 export const stoppedAtQuestion = (scenario, record) =>
-  scenario.turns.some((turn, i) => record.turns[i] && !record.turns[i].confirmations && askedFirst(turn, record.turns[i]));
+  scenario.turns.some((turn, i) => record.turns[i] && nextAnswer(scenario, turn, record.turns[i], (record.added ?? []).some((entry) => entry.turn === i)) !== null);
 
 /** Plays a scenario's turns in a world and judges the result. */
 export async function play(scenario, world) {
@@ -654,8 +671,9 @@ export async function play(scenario, world) {
       await world.comeBack();
       continue;
     }
-    const said = await world.say(turn.text ?? turn);
-    if (askedFirst(turn, said)) await world.answer(YES);
+    let said = await world.say(turn.text ?? turn);
+    const downloaded = () => world.trace().added.some((entry) => entry.turn === world.trace().turns.length - 1);
+    for (let answer; (answer = nextAnswer(scenario, turn, said, downloaded())); ) said = await world.answer(answer);
   }
   const trace = world.trace();
   return { trace, ...judge(scenario, trace) };

@@ -23,6 +23,7 @@ const { createWorld, scripted } = await import('./world.js');
 const THINK = { default: undefined, off: false, on: true, low: 'low', medium: 'medium', high: 'high' };
 const SCRIPTED = 'scripted';
 const MAX_ATTEMPTS = 3;
+const GB = 1024 ** 3;
 // How long memory is given to be released after a model is unloaded.
 const SETTLE_MS = 3000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,6 +37,7 @@ const { values: args } = parseArgs({
     name: { type: 'string', default: 'main' },
     report: { type: 'boolean', default: false },
     measure: { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false },
   },
 });
 if (!Object.hasOwn(THINK, args.think)) throw new Error(`--think must be one of: ${Object.keys(THINK).join(', ')}`);
@@ -120,13 +122,18 @@ async function prepare(model) {
   }
   const gpu = gpuMemoryUsed();
   const running = (await loaded()).find((entry) => isModel(entry, model));
-  return {
-    ...base,
-    loadMs,
-    sizeBytes: running?.size ?? 0,
-    vramBytes: running?.size_vram ?? 0,
-    gpuBytes: gpu == null || before == null ? null : Math.max(0, gpu - before),
-  };
+  const gpuBytes = gpu == null || before == null ? null : Math.max(0, gpu - before);
+
+  // A machine with two graphics adapters can put the model on the weak one,
+  // where it runs many times slower and every timing is meaningless. Hardly any
+  // dedicated graphics memory taken by loading a large model is the sign of it.
+  const fileBytes = (await api('/api/tags')).models?.find((entry) => isModel(entry, model))?.size ?? 0;
+  if (!args.force && gpuBytes != null && fileBytes > GB && gpuBytes < fileBytes * 0.2) {
+    await unload(model);
+    const taken = `${(gpuBytes / GB).toFixed(1)} GB of dedicated graphics memory for a ${(fileBytes / GB).toFixed(1)} GB model`;
+    return { ...base, skipped: `it does not seem to be on the dedicated graphics card (loading it took ${taken}). Run with --force to test it anyway` };
+  }
+  return { ...base, loadMs, sizeBytes: running?.size ?? 0, vramBytes: running?.size_vram ?? 0, gpuBytes };
 }
 
 /** One scenario, once. Repeated if someone else's request loaded another model meanwhile. */

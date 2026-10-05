@@ -74,10 +74,10 @@ export const RELEASES = [
   release('Night.of.the.Living.Dead.1968.TS.XviD-NoGRP', 500, 1.9),
   release('Night.of.the.Living.Dead.1968.720p.WEB-DL.x264-GRP', 300, 1.7),
 
-  release('Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP', 800, 1.2),
-  release('Big.Buck.Bunny.2008.2160p.4K.UHD.WEB.x265.HDR-GRP', 350, 2.8, MOVIE_UHD),
-  release('Big.Buck.Bunny.2008.2160p.UHD.BluRay.REMUX.HDR.HEVC-GRP', 120, 7.5, MOVIE_UHD),
-  release('Big.Buck.Bunny.2008.720p.BluRay.x264-GRP', 200, 0.3),
+  release('Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP', 800, 12),
+  release('Big.Buck.Bunny.2008.2160p.4K.UHD.WEB.x265.HDR-GRP', 350, 28, MOVIE_UHD),
+  release('Big.Buck.Bunny.2008.2160p.UHD.BluRay.REMUX.HDR.HEVC-GRP', 120, 75, MOVIE_UHD),
+  release('Big.Buck.Bunny.2008.720p.BluRay.x264-GRP', 200, 1.3),
 
   // Nothing better than 720p exists.
   release('Elephants.Dream.2006.720p.BluRay.x264-GRP', 45, 0.8),

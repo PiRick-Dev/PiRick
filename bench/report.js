@@ -22,8 +22,8 @@ function percentile(values, fraction) {
 const rescuesIn = (run) => Math.max(0, sum(run.turns.map((turn) => turn.nudges)) - (run.expectsPush ? 1 : 0)) + sum(run.turns.map((turn) => turn.emptyReplies));
 
 /**
- * One summary per model and thinking mode, best first: fewest critical
- * failures before any, then most passes, then fewest rescues, then fastest.
+ * One summary per model and thinking mode, best first: most scenarios passed,
+ * then fewest critical failures, then fewest rescues, then fastest.
  */
 export function summarise(records) {
   const info = new Map(records.filter((record) => record.type === 'model').map((record) => [configOf(record), record]));
@@ -84,8 +84,9 @@ export function summarise(records) {
     };
   });
 
-  // Having any critical failure counts for more than how many: models are not all run equally often.
-  const rank = (entry) => [entry.criticals ? 1 : 0, -entry.passed / entry.runs, entry.criticals / entry.runs, entry.rescues / entry.requests, entry.medianMs];
+  // Critical failures only break ties: models are not all run equally often, and
+  // one that is run more has more chances to have one.
+  const rank = (entry) => [-Math.round((entry.passed / entry.runs) * 100), entry.criticals / entry.runs, entry.rescues / entry.requests, entry.medianMs];
   return summaries.sort((a, b) => {
     const [x, y] = [rank(a), rank(b)];
     const at = x.findIndex((value, i) => value !== y[i]);
@@ -119,7 +120,7 @@ export function render(records, scenarios, numCtx) {
   const out = ['# PiRick model benchmark', ''];
   out.push(`${sum(summaries.map((entry) => entry.runs))} runs of ${scenarios.length} scenarios, written ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC.`, '');
 
-  out.push('## Ranking', '', 'Best first: models with no critical failures before those with any, then most scenarios passed, then fewest rescues, then speed.', '');
+  out.push('## Ranking', '', 'Best first: most scenarios passed, then fewest critical failures for the number of runs, then fewest rescues, then speed.', '');
   out.push(
     table(
       ['#', 'Model', 'Passed', 'Critical failures', 'Asked first, per 100 requests', 'Rescues per 100 requests', 'Typical wait', 'Slow wait', 'Searches per request', 'Tokens/s', 'Thinking', 'Memory', 'Longest prompt'],
