@@ -31,8 +31,25 @@ function cleanTitle(title) {
   return String(title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
+// qBittorrent takes links as a list, one to a line, so a magnet with a line
+// break in it would be read as several things to fetch.
+const isMagnet = (value) => typeof value === 'string' && value.startsWith('magnet:?') && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value);
+
+/** Reads a response body, giving up once it passes `limit` bytes. Resolves to null when it does. */
+async function readUpTo(res, limit) {
+  const chunks = [];
+  let size = 0;
+  // Leaving the loop early cancels the rest of the download.
+  for await (const chunk of res.body ?? []) {
+    size += chunk.length;
+    if (size > limit) return null;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 function normalise(raw) {
-  const magnet = [raw.MagnetUri, raw.Link].find((v) => typeof v === 'string' && v.startsWith('magnet:?')) ?? null;
+  const magnet = [raw.MagnetUri, raw.Link].find(isMagnet) ?? null;
   const link = typeof raw.Link === 'string' && /^https?:\/\//i.test(raw.Link) ? raw.Link : null;
   const title = cleanTitle(raw.Title);
   if (!title || (!magnet && !link)) return null;
@@ -114,7 +131,7 @@ export function createJackett(config) {
       if (result.magnet) return { magnet: result.magnet };
       let url = result.link;
       for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        if (url.startsWith('magnet:?')) return { magnet: url };
+        if (isMagnet(url)) return { magnet: url };
         const target = new URL(url);
         if (target.protocol !== 'http:' && target.protocol !== 'https:') break;
         let res;
@@ -126,16 +143,25 @@ export function createJackett(config) {
         if (res.status >= 300 && res.status < 400) {
           const location = res.headers.get('location');
           if (!location) break;
-          url = location.startsWith('magnet:') ? location : new URL(location, target).href;
+          if (location.startsWith('magnet:')) {
+            url = location;
+            continue;
+          }
+          const next = new URL(location, target);
+          // Jackett fetches the file itself and answers with it or with a magnet.
+          // A link that leads to some other site is not followed from in here,
+          // where it could reach services the outside world cannot.
+          if (next.origin !== target.origin) break;
+          url = next.href;
           continue;
         }
         if (!res.ok) throw new UpstreamError('jackett', `The indexer returned HTTP ${res.status} for the torrent file`);
-        if (Number(res.headers.get('content-length')) > MAX_TORRENT_FILE_BYTES) {
-          throw new UpstreamError('jackett', 'The torrent file is unexpectedly large');
-        }
-        const file = new Uint8Array(await res.arrayBuffer());
+        // A stated length saves the download, but only what actually arrives is trusted.
+        const tooLarge = Number(res.headers.get('content-length')) > MAX_TORRENT_FILE_BYTES;
+        const file = tooLarge ? null : await readUpTo(res, MAX_TORRENT_FILE_BYTES);
+        if (!file) throw new UpstreamError('jackett', 'The torrent file is unexpectedly large');
         // Every .torrent is a bencoded dictionary, which starts with "d".
-        if (file.length === 0 || file.length > MAX_TORRENT_FILE_BYTES || file[0] !== 0x64) {
+        if (file.length === 0 || file[0] !== 0x64) {
           throw new UpstreamError('jackett', 'The indexer did not return a valid torrent file');
         }
         return { file };
