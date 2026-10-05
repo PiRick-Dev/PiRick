@@ -6,7 +6,7 @@ import { UpstreamError, describeError } from './errors.js';
 import { checkFolder, isAbsolutePath, joinPath, splitPath, tidyPath } from './folders.js';
 import { log } from './log.js';
 import { BASE_TAG, userTag } from './qbittorrent.js';
-import { PERSONALITY_MAX, parseLibrary } from './settings.js';
+import { PERSONALITY_MAX, parseLibrary, parseUpkeep } from './settings.js';
 
 const WEB_DIR = fileURLToPath(new URL('../web', import.meta.url));
 const MAX_MESSAGE_LENGTH = 2000;
@@ -41,7 +41,7 @@ function explain(err, user) {
   return user.role === 'admin' ? `${friendly} (${describeError(err)})` : friendly;
 }
 
-export function createApp({ config, auth, agent, conversation, tools, settings, ollama, jackett, qbit }) {
+export function createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit }) {
   const app = express();
   const attempts = createRateLimiter({ windowMs: ATTEMPT_WINDOW_MS });
   const busy = new Set();
@@ -100,6 +100,26 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
   function requireAdmin(req, res, next) {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can do that.' });
     next();
+  }
+
+  /** Starts a line-by-line event stream to the browser. */
+  function openStream(res) {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Accel-Buffering': 'no' });
+    res.on('error', () => {});
+    // If the browser goes away the work still finishes, so the history stays
+    // consistent with what was actually downloaded.
+    const emit = (event) => {
+      if (!res.destroyed && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+    };
+    // A slow model can be silent for minutes; reverse proxies drop idle connections.
+    const heartbeat = setInterval(() => emit({ type: 'ping' }), HEARTBEAT_MS);
+    return {
+      emit,
+      end() {
+        clearInterval(heartbeat);
+        res.end();
+      },
+    };
   }
 
   function tooMany(res, wait) {
@@ -189,26 +209,35 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     if (busy.has(req.user.id)) return res.status(409).json({ error: 'PiRick is still working on your last message.' });
 
     busy.add(req.user.id);
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'X-Accel-Buffering': 'no' });
-    res.on('error', () => {});
-    // If the browser goes away the turn still finishes, so the history stays
-    // consistent with what was actually downloaded.
-    const emit = (event) => {
-      if (!res.destroyed && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
-    };
-    // A slow model can be silent for minutes; reverse proxies drop idle connections.
-    const heartbeat = setInterval(() => emit({ type: 'ping' }), HEARTBEAT_MS);
+    const stream = openStream(res);
     try {
-      await agent.runTurn(req.user, text, emit);
-      emit({ type: 'done' });
+      await agent.runTurn(req.user, text, stream.emit);
+      stream.emit({ type: 'done' });
     } catch (err) {
       log.error('chat failed', { username: req.user.username, error: describeError(err) });
-      emit({ type: 'error', message: explain(err, req.user) });
+      stream.emit({ type: 'error', message: explain(err, req.user) });
     } finally {
-      clearInterval(heartbeat);
       busy.delete(req.user.id);
-      res.end();
+      stream.end();
     }
+  });
+
+  // Called when someone opens the chat: tells them what upkeep did while they were away.
+  api.post('/chat/catch-up', async (req, res) => {
+    const stream = openStream(res);
+    // Skipped while a message is being answered; it is offered again next time.
+    if (!busy.has(req.user.id)) {
+      busy.add(req.user.id);
+      try {
+        await agent.catchUp(req.user, stream.emit);
+      } catch (err) {
+        log.error('catch-up failed', { username: req.user.username, error: describeError(err) });
+      } finally {
+        busy.delete(req.user.id);
+      }
+    }
+    stream.emit({ type: 'done' });
+    stream.end();
   });
 
   // ---- Downloads -----------------------------------------------------------
@@ -217,7 +246,10 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     const everyone = req.user.role === 'admin' && req.query.all === '1';
     try {
       const downloads = await qbit.list(everyone ? BASE_TAG : userTag(req.user.username));
-      res.json({ downloads: downloads.slice(0, 100) });
+      const stuck = upkeep.stuckHashes();
+      res.json({
+        downloads: downloads.slice(0, 100).map(({ hash, ...item }) => (stuck.has(hash) ? { ...item, status: 'stuck', etaSeconds: null } : item)),
+      });
     } catch (err) {
       log.warn('downloads unavailable', { error: describeError(err) });
       res.status(502).json({ error: explain(err, req.user) });
@@ -307,6 +339,30 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     if (!isAbsolutePath(folder)) return res.json({ folders: [] });
     const names = (await foldersIn(folder)) ?? [];
     res.json({ folders: names.sort((a, b) => a.localeCompare(b)).map((name) => joinPath(folder, name)) });
+  });
+
+  // ---- Admin: upkeep -------------------------------------------------------------
+
+  const upkeepState = () => ({ ...settings.upkeep(), ...upkeep.overview(), log: upkeep.recent() });
+
+  admin.get('/upkeep', (req, res) => res.json(upkeepState()));
+
+  admin.put('/upkeep', (req, res) => {
+    const { upkeep: value, error } = parseUpkeep(req.body);
+    if (error) return res.status(400).json({ error });
+    settings.setUpkeep(value);
+    log.info('upkeep settings changed', { ...value, by: req.user.username });
+    res.json(upkeepState());
+  });
+
+  admin.post('/upkeep/run', async (req, res) => {
+    try {
+      const result = await upkeep.runOnce({ manual: true });
+      res.json({ result, ...upkeepState() });
+    } catch (err) {
+      log.warn('upkeep check failed', { error: describeError(err) });
+      res.status(502).json({ error: explain(err, req.user) });
+    }
   });
 
   // ---- Admin: personality ------------------------------------------------------

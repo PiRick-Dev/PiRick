@@ -118,6 +118,69 @@ This works well for a show's later seasons and for alternative titles the assist
 
 Every download PiRick adds is tagged `pirick` and `pirick-<username>` in qBittorrent, so you can see who asked for what.
 
+## How searching works
+
+Indexers match release names literally, and they are not careful with numbers. Asking for the 1925 film "Seven Chances" as "7 Chances" returns episodes numbered 07 of other things and not the film, which is released as `Seven.Chances.1925…`. PiRick does three things about that, without relying on the AI model:
+
+- **Other spellings.** If a search finds nothing suitable, PiRick tries the title's other common spellings: digits as words and words as digits (`7 chances` and `seven chances`), a sequel number as a roman numeral (`Part 2` and `Part II`), and `&` as `and`. The chat line then reads `Searched for “7 chances” (found as “seven chances”)`.
+- **Only relevant results.** Results are kept only if the release name contains the title that was asked for, with its words together and in order. When a year is given, copies from that year win. If nothing clearly matches, the model is told so and warned not to pick from what came back.
+- **Extra words dropped.** Release names do not contain cast or crew. The model is told to search by title and year alone; if a search with extra words after the year still finds nothing, PiRick retries without them.
+
+Searches run one at a time, and a further spelling is only tried when the one before was not enough. This matters when indexers sit behind a Cloudflare solver such as FlareSolverr: each search then takes 10 to 20 seconds, and several sent at once come back with far fewer results, sometimes none. If your indexers are fast and direct, `JACKETT_SEARCHES_AT_ONCE` lets the whole-show planner look at several seasons together.
+
+Two more things to know about Jackett:
+
+- **It caches empty answers.** When an indexer hiccups and returns nothing, Jackett remembers that for the same search for about half an hour. PiRick recognises such an answer because it arrives instantly, and asks again in different capitals, which Jackett treats as a new search. `JACKETT_RETRY_CACHED_EMPTY=false` turns this off.
+- **It hides failing indexers.** Jackett answers with whatever worked. PiRick logs a warning when an indexer reports an error, and **Admin > Connections** names the ones failing in recent searches.
+
+An indexer can also stop answering for a while if it is searched very often in a short time. Jackett then reports it as working with no results, and nothing downstream can tell the difference. If things that certainly exist are suddenly "not found", wait a while and try again.
+
+## Whole shows, seasons and episodes
+
+For anything that is a TV show or anime, PiRick works out the best way to get it and does not leave that choice to the AI model. Asked for a whole show, it prefers, in this order:
+
+1. One complete pack.
+2. Packs covering several seasons, then one pack per season.
+3. Single episodes, the best copy of each, for any season that has no usable pack.
+
+A copy with at least 3 seeders beats one with fewer, then the requested quality (1080p unless the person asks otherwise), then the number of seeders. So a complete pack with 2 seeders loses to healthy season packs, and a pack with no seeders is never chosen. Anything over `MAX_TORRENT_SIZE_GB` is skipped, which lets a huge complete pack fall back to season packs.
+
+Asked for one season, PiRick takes that season's pack, or its single episodes if there is no good pack. Asked for one episode, it takes the best copy of that episode and nothing else.
+
+Everything for one show goes into the same folder. One request may start at most 200 downloads; beyond that PiRick asks the person to choose seasons.
+
+Things to know:
+
+- PiRick has no episode guide. If a season should have ten episodes and the indexers only have eight as single files, it gets the eight and cannot tell that two are missing.
+- When two different shows share a name (say a 1963 and a 2005 series), PiRick does not mix them: it asks which one is meant.
+- Release names that cannot be read (unusual naming) are left out of these plans.
+
+## Upkeep: stuck downloads
+
+PiRick checks its own downloads every 10 minutes: everything in qBittorrent tagged `pirick`, including downloads added before this feature existed. A download is **stuck** when it should be making progress and has not grown for the time set under **Admin > Upkeep** (6 hours by default). Time spent paused, queued or being checked does not count.
+
+When a download is stuck, PiRick looks for another copy of the same thing:
+
+| Stuck item | Replacement |
+|---|---|
+| One episode | Another copy of that episode |
+| A season pack | Another pack of that season, otherwise its single episodes |
+| A complete pack | Another complete pack, otherwise season packs, otherwise episodes |
+| A film | Another copy with the same title and year (never a cinema recording) |
+| Anything else (music, books, unreadable names) | None: it is only flagged |
+
+The replacement goes into the same folder with the same category and tags. Only once qBittorrent has accepted it is the stuck torrent removed, together with its partial files. A copy that was already tried is never picked again. If no other copy exists, the stuck download is left alone and looked for again once a day. Each item is replaced at most three times, and at most five items are replaced per check.
+
+This follows fixed rules; the AI model is not involved, because it runs unattended.
+
+**What people see.** A stuck download reads "Stuck: looking for another copy" in the Downloads panel. When the person who asked for it next opens PiRick, the chat shows what was done as plain status lines, followed by a short summary in PiRick's own voice (using the personality, if one is set). The status lines are written by PiRick and are the reliable record. **Admin > Upkeep** lists the last 50 actions and has a **Check now** button and an off switch.
+
+Things to know:
+
+- A dead pack replaced by single episodes may end up incomplete: only episodes that exist as single files can be fetched. The activity entry says "all that could be found" when this happens.
+- qBittorrent's own queue limits how many downloads are active at once (three by default). Dead downloads holding those slots keep the rest waiting until upkeep replaces them. Turning on "Do not count slow torrents in these limits" in qBittorrent's BitTorrent options, or lowering the hours here, clears a backlog faster.
+- Torrents in an error state in qBittorrent (missing files, disk problems) are flagged but not replaced, since another copy would not fix them.
+
 ## Personality
 
 Under **Admin > Personality** you can describe how PiRick should sound, for example a pirate captain or a grumpy video-store clerk. A few starters are provided. It applies to everyone from their next message.
@@ -158,13 +221,13 @@ location / {
 
 `OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. PiRick was developed and tested with `gemma4:e4b`.
 
-Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened.
+Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
 
 If a model behaves badly, set `LOG_LEVEL=debug` to see each step it takes in `docker compose logs pirick`, or try a larger model.
 
 ## Settings
 
-Connection settings are environment variables in `.env`. Restart with `docker compose up -d` after changing them. Libraries and personality are set in the Admin screen instead and take effect immediately.
+Connection settings are environment variables in `.env`. Restart with `docker compose up -d` after changing them. Libraries, personality and upkeep are set in the Admin screen instead and take effect immediately.
 
 | Variable | What it does | Default |
 |---|---|---|
@@ -179,6 +242,8 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `JACKETT_API_KEY` | From the top right of the Jackett dashboard | none (required) |
 | `JACKETT_INDEXER` | `all`, or one indexer's id | `all` |
 | `JACKETT_TIMEOUT_SECONDS` | Give up on a search after this long | `60` |
+| `JACKETT_SEARCHES_AT_ONCE` | How many searches the whole-show planner may run together. Keep at 1 if indexers use FlareSolverr. | `1` |
+| `JACKETT_RETRY_CACHED_EMPTY` | Ask again when Jackett instantly replays an empty answer | `true` |
 | `SEARCH_RESULT_LIMIT` | How many results the model gets to choose from | `15` |
 | `QBIT_URL` | qBittorrent Web UI address | `http://host.docker.internal:8080` |
 | `QBIT_USERNAME`, `QBIT_PASSWORD` | qBittorrent Web UI login | none |
@@ -218,7 +283,7 @@ docker compose exec pirick node src/cli.js reset-password <username>
 
 This prints a new password and signs that person out everywhere.
 
-The database (accounts, sessions, chat history, libraries and personality) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
+The database (accounts, sessions, chat history, libraries, personality and upkeep records) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
 
 ## Troubleshooting
 
@@ -229,7 +294,11 @@ The database (accounts, sessions, chat history, libraries and personality) is on
 | Jackett: "rejected the API key" or "did not return search results" | `JACKETT_API_KEY` or `JACKETT_URL` is wrong. |
 | qBittorrent: "rejected the login" | Wrong `QBIT_USERNAME` / `QBIT_PASSWORD`. |
 | qBittorrent: "temporarily banned" | Too many failed logins. Fix the password, then wait or restart qBittorrent. |
-| Searches find nothing | Check that the same search works in Jackett's own page and that indexers are configured. |
+| Searches find nothing | Check **Admin > Connections** for failing indexers, and that the same search works in Jackett's own page. If it worked a moment ago, an indexer may be throttling: see "How searching works". |
+| A search took half a minute | Normal behind FlareSolverr, where each search takes 10 to 20 seconds and a second spelling doubles it. The chat shows which spelling is being searched. |
+| A show came down as many single episodes | No pack with enough seeders was found. The grey "Found …" line in the chat says what PiRick chose. |
+| A download has sat at the same point for days | Check **Admin > Upkeep**: it shows whether the item is stuck and why it was not replaced (no other copy, already replaced three times, or its name could not be read). |
+| Many downloads are "queued" and never start | qBittorrent's queue limit, with dead downloads holding the active slots. See "Upkeep: stuck downloads". |
 | Downloads finish but are not in Plex | The library's folder is not inside a Plex library folder. See "Libraries". |
 | "Not downloaded: the … library's folder does not exist" | The folder in Admin > Libraries is wrong, often only in its capitals. Open that screen and use the suggested fix. |
 | A download went into the wrong library | Make the "What goes here" descriptions more specific, especially where two libraries overlap. |
@@ -263,8 +332,11 @@ npm run dev       # runs from .env with auto-reload; data goes to ./data
 | `src/server.js`, `src/build.js` | Start-up and wiring |
 | `src/routes.js` | Pages, API, security headers |
 | `src/auth.js` | Passwords, sessions, rate limiting, accounts |
-| `src/agent.js` | The system prompt, the tool-calling loop and the check on model replies |
-| `src/tools.js` | The three tools the model can call: search, download (into a library), list downloads |
+| `src/agent.js` | The system prompt, the tool-calling loop, the check on model replies, and the welcome-back summary |
+| `src/tools.js` | The tools the model can call: search, find a show, download (a result or a whole plan, into a library), list downloads |
+| `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
+| `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
+| `src/upkeep.js` | The periodic check for stuck downloads and their replacement |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js` | Clients for the three services |
 | `src/settings.js`, `src/folders.js` | Libraries and personality; folder naming, matching and checks |
 | `src/conversation.js`, `src/db.js` | Chat history and the SQLite schema |

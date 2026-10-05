@@ -1,4 +1,5 @@
 import { UpstreamError, describeError } from './errors.js';
+import { log } from './log.js';
 
 const MAX_TORRENT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -49,6 +50,8 @@ function normalise(raw) {
 }
 
 export function createJackett(config) {
+  // Indexers that reported an error in the most recent searches, and why.
+  const failing = new Map();
   async function get(indexer, path, params, accept) {
     if (!config.apiKey) throw new UpstreamError('jackett', 'JACKETT_API_KEY is not set');
     const url = new URL(`${config.url}/api/v2.0/indexers/${encodeURIComponent(indexer)}/results${path}`);
@@ -78,6 +81,17 @@ export function createJackett(config) {
         throw new UpstreamError('jackett', 'Jackett did not return search results: check JACKETT_URL and JACKETT_API_KEY');
       }
       const data = await res.json();
+      // Jackett answers with whatever worked, so a broken indexer is easy to miss.
+      for (const entry of data.Indexers ?? []) {
+        const name = String(entry.Name ?? entry.ID);
+        if (!entry.Error) {
+          failing.delete(name);
+          continue;
+        }
+        const reason = String(entry.Error).split('\n')[0].replace(/^[\w.]*Exception:\s*/, '').slice(0, 140);
+        if (!failing.has(name)) log.warn('a Jackett indexer is failing', { indexer: name, reason });
+        failing.set(name, reason);
+      }
       const seen = new Set();
       const results = [];
       const all = (data.Results ?? []).map(normalise).filter(Boolean).sort((a, b) => b.seeders - a.seeders);
@@ -140,7 +154,8 @@ export function createJackett(config) {
       }
       const count = (xml.match(/<indexer\b/g) ?? []).length;
       if (count === 0) throw new UpstreamError('jackett', 'Connected, but no indexers are configured in Jackett');
-      return `${count} indexer${count === 1 ? '' : 's'} configured`;
+      const broken = failing.size ? `; failing in recent searches: ${[...failing.keys()].join(', ')}` : '';
+      return `${count} indexer${count === 1 ? '' : 's'} configured${broken}`;
     },
   };
 }

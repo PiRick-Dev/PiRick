@@ -36,7 +36,7 @@ async function ensureAdmin(auth, config) {
 
 async function main() {
   const config = loadConfig();
-  const { app, auth, db, settings } = build(config);
+  const { app, auth, db, settings, upkeep } = build(config);
   await ensureAdmin(auth, config);
 
   if (!config.jackett.apiKey) log.warn('JACKETT_API_KEY is not set: searches will fail until it is');
@@ -53,10 +53,13 @@ async function main() {
   const server = app.listen(config.port, () => {
     log.info('PiRick is listening', { port: config.port, model: config.ollama.model });
   });
+  // Watches PiRick's own downloads and replaces the ones that get stuck.
+  upkeep.start();
 
   // As PID 1 in a container, Node gets no default signal handling.
   const shutdown = (signal) => {
     log.info('shutting down', { signal });
+    upkeep.stop();
     server.close(() => {
       db.close();
       process.exit(0);

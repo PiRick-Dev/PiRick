@@ -1,4 +1,5 @@
 // Folder and title logic for libraries. Everything here is pure: no network, no database.
+import { canonicalWord } from './words.js';
 
 const FORBIDDEN_IN_NAMES = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
 const MAX_FOLDER_NAME = 120;
@@ -7,7 +8,7 @@ const MAX_SIMILAR = 8;
 const FILLER_WORDS = new Set(['with', 'from', 'that', 'this', 'your', 'season', 'series', 'complete', 'part', 'movie', 'show']);
 // The first of these in a release name marks where the title ends.
 const RELEASE_MARKERS =
-  /\b(?:S\d{1,2}(?:E\d{1,3})?|Season \d+|\d{1,2}x\d{2}|(?:19|20)\d{2}|\d{3,4}p|Complete|BluRay|BDRip|WEB|HDTV|DVDRip)\b|\s-\s\d{1,3}\b|[[(]/gi;
+  /\b(?:S\d{1,2}(?: ?E\d{1,3})*|(?:Seasons?|Saison|Series) \d+|\d{1,2}(?:st|nd|rd|th) Season|\d{1,2}x\d{2}|(?:Ep?|Episode) ?\d{1,4}|(?:19|20)\d{2}|\d{3,4}p|(?:The )?Complete|Batch|BluRay|BDRip|WEB|HDTV|DVDRip)\b|\s-\s\d{1,4}(?:v\d)?\b|\s\d{2,3} ?[-~] ?\d{2,3}\b|[[(]/gi;
 
 /**
  * Makes a title safe to use as a single folder name. Path separators and the
@@ -29,7 +30,8 @@ export function cleanFolderName(name) {
 /**
  * The form in which two titles are compared: capitals, accents and punctuation
  * are ignored, as are a trailing year and Plex id tags, so "Tears of Steel
- * (2012) {tvdb-208671}" and "tears of steel" are the same show.
+ * (2012) {tvdb-208671}" and "tears of steel" are the same show. Numbers are
+ * put in one form, so "Seven Chances" and "7 Chances" are the same too.
  */
 export function titleKey(name) {
   let text = String(name ?? '');
@@ -44,7 +46,10 @@ export function titleKey(name) {
     .replace(/&/g, ' and ')
     .replace(/['’]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .map(canonicalWord)
+    .join(' ');
 }
 
 /** A best-effort title from a release name, for when the model did not supply one. */

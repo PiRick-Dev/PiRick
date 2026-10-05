@@ -1,8 +1,10 @@
 import { transaction } from './db.js';
 
 const KEEP_PER_USER = 400;
-// Rows with this role are shown in the chat window but never sent to the model.
+// Rows with these roles are shown in the chat window but never sent to the model.
+// An 'aside' is something PiRick said unprompted, such as a welcome-back summary.
 const STATUS = 'status';
+const ASIDE = 'aside';
 
 export function createConversation(db) {
   const insert = db.prepare('INSERT INTO messages (user_id, role, content, created_at) VALUES (?, ?, ?, ?)');
@@ -13,7 +15,7 @@ export function createConversation(db) {
     )`);
   const recentForModel = db.prepare(`
     SELECT content FROM (
-      SELECT id, content FROM messages WHERE user_id = ? AND role != ? ORDER BY id DESC LIMIT ?
+      SELECT id, content FROM messages WHERE user_id = ? AND role NOT IN (?, ?) ORDER BY id DESC LIMIT ?
     ) ORDER BY id`);
   const recentForDisplay = db.prepare(`
     SELECT content FROM (
@@ -33,7 +35,7 @@ export function createConversation(db) {
 
     /** Recent messages to replay to the model. Always starts at a user message. */
     context(userId, limit = 40) {
-      const messages = recentForModel.all(userId, STATUS, limit).map((row) => JSON.parse(row.content));
+      const messages = recentForModel.all(userId, STATUS, ASIDE, limit).map((row) => JSON.parse(row.content));
       // The window may have cut a tool exchange in half; drop the orphaned start.
       while (messages.length && messages[0].role !== 'user') messages.shift();
       return messages;
@@ -45,7 +47,7 @@ export function createConversation(db) {
       for (const row of recentForDisplay.all(userId, limit)) {
         const message = JSON.parse(row.content);
         if (message.role === STATUS) items.push({ type: 'status', text: message.text, kind: message.kind });
-        else if (message.content?.trim()) items.push({ type: message.role, text: message.content });
+        else if (message.content?.trim()) items.push({ type: message.role === ASIDE ? 'assistant' : message.role, text: message.content });
       }
       return items;
     },

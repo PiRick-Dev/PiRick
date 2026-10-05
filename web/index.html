@@ -94,6 +94,7 @@
         <button type="button" role="tab" id="tabbtn-connections" data-tab="connections" aria-controls="tab-connections" aria-selected="true">Connections</button>
         <button type="button" role="tab" id="tabbtn-libraries" data-tab="libraries" aria-controls="tab-libraries" aria-selected="false">Libraries</button>
         <button type="button" role="tab" id="tabbtn-personality" data-tab="personality" aria-controls="tab-personality" aria-selected="false">Personality</button>
+        <button type="button" role="tab" id="tabbtn-upkeep" data-tab="upkeep" aria-controls="tab-upkeep" aria-selected="false">Upkeep</button>
         <button type="button" role="tab" id="tabbtn-people" data-tab="people" aria-controls="tab-people" aria-selected="false">People</button>
       </div>
 
@@ -147,6 +148,25 @@
           <p id="personality-note" class="form-note" role="status" hidden></p>
           <button type="submit" class="primary">Save personality</button>
         </form>
+      </section>
+
+      <section id="tab-upkeep" role="tabpanel" aria-labelledby="tabbtn-upkeep" hidden>
+        <p class="muted">PiRick checks its downloads every 10 minutes. One that makes no progress for the time below is replaced with another copy when one exists, and the stuck one is then removed along with its partial files.</p>
+        <form id="upkeep-form" class="stack" method="post">
+          <label class="check"><input type="checkbox" name="enabled"> Replace stuck downloads automatically</label>
+          <label>Hours without progress before a download counts as stuck
+            <input name="stuckHours" type="number" min="1" max="168" step="1" inputmode="numeric" required>
+          </label>
+          <p id="upkeep-note" class="form-note" role="status" hidden></p>
+          <div class="row-actions">
+            <button type="submit" class="primary">Save</button>
+            <button type="button" id="upkeep-run">Check now</button>
+          </div>
+        </form>
+        <h4>Recent activity</h4>
+        <p id="upkeep-summary" class="muted small"></p>
+        <p id="upkeep-empty" class="muted small" hidden>Nothing has needed attention yet.</p>
+        <ul id="upkeep-log" class="status-list"></ul>
       </section>
 
       <section id="tab-people" role="tabpanel" aria-labelledby="tabbtn-people" hidden>

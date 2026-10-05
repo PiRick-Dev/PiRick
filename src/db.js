@@ -38,6 +38,29 @@ const SCHEMA = `
     category    TEXT NOT NULL DEFAULT ''
   );
 
+  -- Unfinished downloads PiRick is watching for progress.
+  CREATE TABLE IF NOT EXISTS tracked_downloads (
+    hash        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    username    TEXT NOT NULL DEFAULT '',
+    completed   INTEGER NOT NULL DEFAULT 0,
+    progress_at INTEGER NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'watching',
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    tried       TEXT NOT NULL DEFAULT '[]',
+    searched_at INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- What upkeep did, for the admin screen and for telling each person on their return.
+  CREATE TABLE IF NOT EXISTS upkeep_log (
+    id       INTEGER PRIMARY KEY,
+    at       INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    action   TEXT NOT NULL,
+    detail   TEXT NOT NULL,
+    seen     INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

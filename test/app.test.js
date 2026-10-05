@@ -31,10 +31,64 @@ const DOWNLOAD_ARGS = {
   kids: { library: 'Kids', title: 'Caminandes' },
 };
 
+// Shows the scripted model asks find_show for, by keyword in the request.
+const SHOW_ARGS = {
+  packshow: { title: 'Packshow' },
+  solo: { title: 'Solo' },
+  twins: { title: 'Twins' },
+};
+
+const magnet = (digit) => `magnet:?xt=urn:btih:${digit.repeat(40)}`;
+// What the stand-in Jackett answers for particular searches. `link` means the
+// result has no magnet, only a .torrent to fetch.
+const JACKETT_CATALOG = {
+  packshow: [
+    { Title: 'Packshow.S01E01.1080p.WEB', Size: 1e9, Seeders: 50, Category: [5040], MagnetUri: magnet('1') },
+    { Title: 'Packshow.S02.1080p.WEB', Size: 2e10, Seeders: 20, Category: [5040], MagnetUri: magnet('2') },
+  ],
+  'packshow complete': [],
+  'packshow s01': [
+    { Title: 'Packshow.S01.1080p.WEB', Size: 1.5e10, Seeders: 15, Category: [5040], link: true },
+    { Title: 'Packshow.S01E01.1080p.WEB', Size: 1e9, Seeders: 50, Category: [5040], MagnetUri: magnet('1') },
+  ],
+  'packshow s01e03': [
+    { Title: 'Packshow.S01E03.1080p.WEB', Size: 1e9, Seeders: 1, Category: [5040], MagnetUri: magnet('c') },
+    { Title: 'Packshow.S01E03.720p.HDTV', Size: 5e8, Seeders: 12, Category: [5040], MagnetUri: magnet('6') },
+  ],
+  solo: [{ Title: 'Solo.The.Complete.Series.1080p.BluRay', Size: 4e10, Seeders: 25, Category: [5040], MagnetUri: magnet('3') }],
+  'solo complete': [{ Title: 'Solo.The.Complete.Series.1080p.BluRay', Size: 4e10, Seeders: 25, Category: [5040], MagnetUri: magnet('3') }],
+  twins: [
+    { Title: 'Twins.US.S01.1080p', Size: 1e10, Seeders: 30, Category: [5040], MagnetUri: magnet('4') },
+    { Title: 'Twins.UK.S01.720p', Size: 1e10, Seeders: 30, Category: [5040], MagnetUri: magnet('5') },
+  ],
+  'twins complete': [],
+  // A film released under a spelled-out title. Searching "7 chances 1925" itself gets
+  // the stand-in's default, unrelated answer, as it would from a real indexer.
+  '7 chances 1925 buster keaton': [],
+  'seven chances 1925 buster keaton': [],
+  'seven chances 1925': [
+    { Title: 'Seven.Chances.2013.REMASTERED.1925.BDRip.x264-GRP', Size: 1.1e9, Seeders: 1, Category: [2040], MagnetUri: magnet('8') },
+    { Title: 'Seven.Chances.1925.720p.WEB-DL.H264 GRP [Public]', Size: 3459596156, Seeders: 22, Category: [2040], MagnetUri: magnet('7') },
+  ],
+};
+
 const servers = [];
-const seen = { ollama: [], jackett: [], added: [], tagged: [], qbitLogins: 0 };
+const seen = {
+  ollama: [],
+  jackett: [],
+  added: [],
+  tagged: [],
+  deleted: [],
+  qbitLogins: 0,
+  // What the stand-in qBittorrent holds; tests add to it.
+  torrents: [
+    { hash: 'a'.repeat(40), name: 'Big Buck Bunny', progress: 0.425, state: 'downloading', eta: 600, size: 2e9, added_on: 1700000000, tags: 'pirick, pirick-admin' },
+    { hash: 'b'.repeat(40), name: 'Sintel', progress: 1, state: 'stalledUP', eta: 8640000, size: 1e9, added_on: 1600000000, tags: 'pirick, pirick-sam' },
+  ],
+};
 let base;
 let adminCookie;
+let database;
 
 async function listen(handler) {
   const server = http.createServer((req, res) => {
@@ -65,17 +119,31 @@ async function ollamaHandler(req, res) {
   const body = JSON.parse(await readBody(req));
   seen.ollama.push(body);
   const last = body.messages.at(-1);
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+  if (body.messages[0].content.includes('has just come back')) {
+    // The welcome-back summary: no tools, just the notes to put into words.
+    res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'Welcome back, matey! ' }, done: false })}\n`);
+    res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'I swapped a dead download for a live one.' }, done: false })}\n`);
+    return res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, done: true })}\n`);
+  }
   const isNudge = (message) => message.content.startsWith('[Automatic check');
   const fromUser = body.messages.filter((message) => message.role === 'user');
   const nudged = isNudge(fromUser.at(-1));
   const asked = fromUser.findLast((message) => !isNudge(message)).content;
   const firstResult = () => JSON.parse(body.messages.findLast((m) => m.tool_name === 'search_media').content).results[0].id;
-  res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
   const say = (message) => res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', ...message }, done: false })}\n`);
   const call = (name, args) => say({ tool_calls: [{ id: `call_${name}`, function: { name, arguments: args } }] });
   const keyword = Object.keys(DOWNLOAD_ARGS).find((word) => asked.includes(word));
+  const show = Object.keys(SHOW_ARGS).find((word) => asked.includes(word));
 
-  if (asked.includes('forged')) {
+  if (show) {
+    // A whole show: ask find_show for a plan, then download the plan in one call.
+    const answer = last.role === 'tool' ? JSON.parse(last.content) : null;
+    if (last.role === 'user') call('find_show', SHOW_ARGS[show]);
+    else if (last.tool_name === 'find_show' && answer.plan) call('download', { result_id: answer.plan.id, library: 'TV', title: SHOW_ARGS[show].title });
+    else if (last.tool_name === 'find_show') say({ content: 'Which one do you mean?' });
+    else say({ content: answer.ok ? 'All of it is on its way.' : 'That did not work out.' });
+  } else if (asked.includes('forged')) {
     if (last.role === 'user') call('download', { result_id: 'zzzz', library: 'Movies' });
     else say({ content: 'I need to search first.' });
   } else if (asked.includes('lazy')) {
@@ -104,7 +172,7 @@ async function ollamaHandler(req, res) {
     else say({ content: answer?.ok ? 'All sorted.' : 'That did not work out.' });
   } else if (last.role === 'user') {
     say({ thinking: 'The user wants a film.' });
-    call('search_media', { query: 'big buck bunny', media_type: 'movie' });
+    call('search_media', { query: asked.includes('Buster') ? '7 chances 1925 Buster Keaton' : 'big buck bunny', media_type: 'movie' });
   } else if (last.tool_name === 'search_media') {
     const { results } = JSON.parse(last.content);
     call('download', { result_id: results[asked.includes('second') ? 1 : 0].id, library: 'Movies' });
@@ -128,6 +196,12 @@ async function jackettHandler(req, res) {
     return res.writeHead(200, { 'Content-Type': 'application/xml' }).end('<indexers><indexer id="a"/><indexer id="b"/></indexers>');
   }
   seen.jackett.push(url);
+  const known = JACKETT_CATALOG[url.searchParams.get('Query').toLowerCase()];
+  if (known) {
+    return json(res, {
+      Results: known.map(({ link, ...result }) => ({ ...result, Tracker: 'idx', ...(link && { Link: `http://${req.headers.host}/dl/bunny.torrent` }) })),
+    });
+  }
   json(res, {
     Results: [
       { Title: 'Big.Buck.Bunny.2008.720p', Size: 5e8, Seeders: 5, Category: [2000], Link: `http://${req.headers.host}/dl/bunny.torrent`, Tracker: 'idx' },
@@ -177,20 +251,22 @@ async function qbitHandler(req, res) {
     seen.tagged.push(Object.fromEntries(await form()));
     return res.end();
   }
+  if (url.pathname === '/api/v2/torrents/delete') {
+    const fields = Object.fromEntries(await form());
+    seen.deleted.push(fields);
+    seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== fields.hashes);
+    return res.end();
+  }
   if (url.pathname === '/api/v2/torrents/info') {
-    if (url.searchParams.get('hashes')) {
-      const known = url.searchParams.get('hashes') === 'f'.repeat(40);
-      return json(res, known ? [{ name: 'Known', progress: 1, state: 'uploading', size: 1, tags: 'pirick' }] : []);
-    }
-    if (!url.searchParams.get('tag')) {
+    const hashes = url.searchParams.get('hashes');
+    if (hashes === 'f'.repeat(40)) return json(res, [{ name: 'Known', progress: 1, state: 'uploading', size: 1, tags: 'pirick' }]);
+    if (hashes) return json(res, seen.torrents.filter((torrent) => torrent.hash === hashes));
+    const tag = url.searchParams.get('tag');
+    if (!tag) {
       // Everything added so far, whether or not its folder is on disk yet.
       return json(res, seen.added.map((torrent) => ({ save_path: torrent.savepath, tags: torrent.tags })));
     }
-    const all = [
-      { name: 'Big Buck Bunny', progress: 0.425, state: 'downloading', eta: 600, size: 2e9, added_on: 1700000000, tags: 'pirick, pirick-admin' },
-      { name: 'Sintel', progress: 1, state: 'stalledUP', eta: 8640000, size: 1e9, added_on: 1600000000, tags: 'pirick, pirick-sam' },
-    ];
-    return json(res, all.filter((torrent) => torrent.tags.split(', ').includes(url.searchParams.get('tag'))));
+    return json(res, seen.torrents.filter((torrent) => torrent.tags.split(', ').includes(tag)));
   }
   res.writeHead(404).end('Endpoint does not exist');
 }
@@ -243,12 +319,15 @@ before(async () => {
     QBIT_URL: qbitUrl,
     QBIT_USERNAME: 'qb-user',
     QBIT_PASSWORD: 'qb-pass',
+    // The stand-ins answer instantly, which PiRick would otherwise take for Jackett's cache and ask twice.
+    JACKETT_RETRY_CACHED_EMPTY: 'false',
     // Retired settings must be ignored, not turned into folders or categories.
     QBIT_CATEGORY_TV: 'tv',
     QBIT_SAVEPATH_MOVIE: '/somewhere/else',
   });
   config.dbFile = ':memory:';
-  const { app, auth } = build(config);
+  const { app, auth, db } = build(config);
+  database = db;
   await auth.createUser('admin', 'admin-password', 'admin');
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -268,7 +347,7 @@ test('signed-out visitors are sent to the login page and refused by the API', as
   assert.equal(home.status, 302);
   assert.equal(home.headers.get('location'), '/login');
 
-  for (const path of ['/api/me', '/api/chat', '/api/downloads', '/api/admin/users', '/api/admin/libraries', '/api/admin/personality']) {
+  for (const path of ['/api/me', '/api/chat', '/api/downloads', '/api/admin/users', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep']) {
     assert.equal((await request(path, { cookie: null })).status, 401, path);
   }
   assert.equal((await request('/api/chat', { method: 'POST', body: { message: 'hi' }, cookie: null })).status, 401);
@@ -423,8 +502,8 @@ test('the model is offered the libraries by name, and never sees paths, links or
   assert.match(lastCall.messages[0].content, /- Anime: Japanese animated series and films \(each show has its own folder/);
   assert.match(lastCall.messages[0].content, /- Movies: Films\n/);
 
-  assert.deepEqual(lastCall.tools.map((tool) => tool.function.name), ['search_media', 'download', 'list_downloads']);
-  const { properties, required } = lastCall.tools[1].function.parameters;
+  assert.deepEqual(lastCall.tools.map((tool) => tool.function.name), ['search_media', 'find_show', 'download', 'list_downloads']);
+  const { properties, required } = lastCall.tools[2].function.parameters;
   assert.deepEqual(properties.library.enum, ['Anime', 'Kids', 'Movies', 'TV']);
   assert.deepEqual(required, ['result_id', 'library', 'title']);
 
@@ -566,6 +645,83 @@ test('an admin-set personality reaches the model on the next message', async () 
   assert.equal((await getJson('/api/admin/personality')).personality, '');
 });
 
+test('a title with numbers is found however it is spelled, even with a star’s name added', async () => {
+  const before = seen.added.length;
+  const searchesBefore = seen.jackett.length;
+  const { statuses, toolResult } = await chat('I want to watch 7 Chances starring Buster Keaton, from 1925');
+
+  // The search as typed finds nothing in either spelling, so the words after the
+  // year are dropped; that finds unrelated things as digits and the film as words.
+  // One search at a time, each only because the last was not enough.
+  assert.deepEqual(seen.jackett.slice(searchesBefore).map((url) => url.searchParams.get('Query')), [
+    '7 chances 1925 Buster Keaton',
+    'seven chances 1925 Buster Keaton',
+    '7 chances 1925',
+    'seven chances 1925',
+  ]);
+  assert.deepEqual(statuses.map((event) => event.text), [
+    'Searched for “7 chances 1925 Buster Keaton” (found as “seven chances 1925”): 2 results',
+    'Started downloading: Seven.Chances.1925.720p.WEB-DL.H264 GRP [Public] (3.2 GB) → Movies',
+  ]);
+  // The unrelated results that "7 chances 1925" brings back never reach the model.
+  const offered = JSON.parse(seen.ollama.at(-2).messages.at(-1).content).results.map((result) => result.title);
+  assert.deepEqual(offered, ['Seven.Chances.1925.720p.WEB-DL.H264 GRP [Public]', 'Seven.Chances.2013.REMASTERED.1925.BDRip.x264-GRP']);
+  assert.equal(seen.added.length, before + 1);
+  assert.equal(seen.added.at(-1).urls, magnet('7'));
+  assert.equal(toolResult().ok, true);
+  // The model is told to keep people's names out of searches.
+  assert.match(seen.ollama.at(-1).tools[0].function.parameters.properties.query.description, /Never add actors/);
+});
+
+test('a whole show is fetched as packs, in the fewest downloads', async () => {
+  const before = seen.added.length;
+  const searchesBefore = seen.jackett.length;
+  const { statuses, shown, toolResult } = await chat('get every episode of packshow');
+
+  // The bare title showed an episode of season 1 and a pack of season 2, so only
+  // season 1 was searched again, where its pack turned up.
+  assert.deepEqual(seen.jackett.slice(searchesBefore).map((url) => url.searchParams.get('Query')), ['Packshow', 'Packshow complete', 'Packshow S01']);
+  assert.deepEqual(statuses.map((event) => event.text), [
+    'Found “Packshow”: seasons 1 and 2 as packs (32.6 GB)',
+    'Started downloading: Packshow.S01.1080p.WEB (14.0 GB) → TV / Packshow (new folder)',
+    'Started downloading: Packshow.S02.1080p.WEB (18.6 GB) → TV / Packshow',
+  ]);
+  // Two torrents instead of one per episode, both in the show's folder.
+  assert.equal(seen.added.length, before + 2);
+  const [first, second] = seen.added.slice(-2);
+  assert.deepEqual(first.file, TORRENT_BYTES, 'the pack that only had a link was fetched and uploaded');
+  assert.equal(second.urls, magnet('2'));
+  assert.deepEqual([first.savepath, second.savepath], ['/media/TV/Packshow', '/media/TV/Packshow']);
+  assert.equal(toolResult().downloads_started, 2);
+  assert.equal(shown, 'All of it is on its way.');
+
+  // The model was handed one plan, not a list of episodes to pick through.
+  const plan = JSON.parse(seen.ollama.at(-2).messages.findLast((message) => message.tool_name === 'find_show').content).plan;
+  assert.deepEqual(plan.gets.map((part) => part.what), ['Season 1', 'Season 2']);
+  assert.equal(plan.downloads, 2);
+});
+
+test('a good complete pack is preferred over everything else', async () => {
+  const before = seen.added.length;
+  const searchesBefore = seen.jackett.length;
+  const { statuses } = await chat('I want the whole solo series');
+  assert.deepEqual(statuses.map((event) => event.text), [
+    'Found “Solo”: the complete series in one pack (37.3 GB)',
+    'Started downloading: Solo.The.Complete.Series.1080p.BluRay (37.3 GB) → TV / Solo (new folder)',
+  ]);
+  assert.equal(seen.added.length, before + 1);
+  assert.equal(seen.jackett.length, searchesBefore + 1, 'the first search was enough: nothing else was looked up');
+});
+
+test('two shows with the same name are not mixed: the user is asked', async () => {
+  const before = seen.added.length;
+  const { statuses, shown, toolResult } = await chat('get twins please');
+  assert.deepEqual(statuses.map((event) => event.text), ['Looked for “Twins”: several different shows match']);
+  assert.deepEqual(toolResult().different_shows, ['Twins US', 'Twins UK']);
+  assert.equal(shown, 'Which one do you mean?');
+  assert.equal(seen.added.length, before);
+});
+
 test('history survives a reload and can be cleared', async () => {
   const { messages } = await getJson('/api/chat');
   assert.deepEqual(messages.slice(0, 4).map((item) => item.type), ['user', 'status', 'status', 'assistant']);
@@ -592,6 +748,66 @@ test('downloads show only your own unless an admin asks for everyone', async () 
   assert.deepEqual(everyone.downloads.map((item) => item.status), ['downloading', 'finished']);
 });
 
+test('a stuck download is replaced, and its owner is told in PiRick’s voice on their return', async () => {
+  const run = async () => (await request('/api/admin/upkeep/run', { method: 'POST' })).json();
+  const stalled = { progress: 0, completed: 0, state: 'stalledDL', size: 1e9, added_on: 1500000000, tags: 'pirick, pirick-admin', category: '' };
+  const dead = { ...stalled, hash: 'c'.repeat(40), name: 'Packshow.S01E03.1080p.WEB', save_path: '/media/TV/Packshow' };
+  const album = { ...stalled, hash: 'd'.repeat(40), name: 'Artist - Album [FLAC]', save_path: '/media/Music' };
+  seen.torrents.push(dead, album);
+
+  const settings = await getJson('/api/admin/upkeep');
+  assert.deepEqual([settings.enabled, settings.stuckHours, settings.log], [true, 6, []]);
+
+  // First look: every unfinished download is adopted; nothing has had time to be stuck.
+  assert.deepEqual((await run()).result, { watching: 3, stuck: 0, replaced: 0 });
+  assert.equal((await request('/api/chat/catch-up', { method: 'POST' }).then((res) => res.text())).trim(), '{"type":"done"}', 'nothing to report yet');
+
+  // Seven hours go by with no progress on the two stalled ones.
+  database.prepare('UPDATE tracked_downloads SET progress_at = progress_at - ? WHERE hash IN (?, ?)').run(7 * 60 * 60 * 1000, dead.hash, album.hash);
+  const addedBefore = seen.added.length;
+  const second = await run();
+  assert.deepEqual(second.result, { watching: 3, stuck: 2, replaced: 1 });
+
+  // The episode: another copy, in the same folder with the same tags; the dead one deleted with its files.
+  assert.equal(seen.added.length, addedBefore + 1);
+  assert.deepEqual(seen.added.at(-1), { urls: magnet('6'), file: null, category: null, savepath: '/media/TV/Packshow', autoTMM: 'false', tags: 'pirick,pirick-admin' });
+  assert.deepEqual(seen.deleted, [{ hashes: dead.hash, deleteFiles: 'true' }]);
+  // The album: PiRick cannot tell what to look for, so it is flagged and left.
+  assert.deepEqual(second.log.map((entry) => entry.action), ['stuck', 'replaced']);
+  const mine = (await getJson('/api/downloads')).downloads;
+  assert.deepEqual(mine.map((item) => [item.name, item.status]), [['Big Buck Bunny', 'downloading'], ['Artist - Album [FLAC]', 'stuck']]);
+
+  // The owner comes back: plain facts first, then the summary in PiRick's voice.
+  const events = (await (await request('/api/chat/catch-up', { method: 'POST' })).text()).trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(events.filter((event) => event.type === 'status').map((event) => event.text), [
+    'Replaced the stuck download of “Packshow (S01E03)” with another copy (“Packshow.S01E03.720p.HDTV”).',
+    '“Artist - Album [FLAC]” is stuck, and its name does not say clearly enough what it is to look for another copy.',
+  ]);
+  assert.equal(events.filter((event) => event.type === 'delta').map((event) => event.text).join(''), 'Welcome back, matey! I swapped a dead download for a live one.');
+  assert.equal(events.at(-1).type, 'done');
+  const asked = seen.ollama.at(-1);
+  assert.equal(asked.tools, undefined, 'the summary cannot do anything, only speak');
+  assert.match(asked.messages[1].content, /^Notes:\n- Replaced the stuck download of “Packshow \(S01E03\)”/);
+
+  // It is in the chat history, and it is only said once.
+  const history = (await getJson('/api/chat')).messages;
+  assert.deepEqual(history.slice(-3).map((item) => item.type), ['status', 'status', 'assistant']);
+  assert.equal(history.at(-1).text, 'Welcome back, matey! I swapped a dead download for a live one.');
+  assert.equal((await request('/api/chat/catch-up', { method: 'POST' }).then((res) => res.text())).trim(), '{"type":"done"}');
+  // What PiRick said unprompted is not replayed to the model as something to imitate.
+  await chat('Can you get Big Buck Bunny?');
+  assert.equal(JSON.stringify(seen.ollama.at(-1).messages).includes('Welcome back, matey'), false);
+
+  // Settings are validated and saved.
+  const put = (body) => request('/api/admin/upkeep', { method: 'PUT', body });
+  assert.equal((await put({ enabled: true, stuckHours: 0 })).status, 400);
+  assert.equal((await put({ enabled: 'yes', stuckHours: 6 })).status, 400);
+  assert.equal((await (await put({ enabled: false, stuckHours: 12 })).json()).stuckHours, 12);
+  assert.equal((await getJson('/api/admin/upkeep')).enabled, false);
+  await put({ enabled: true, stuckHours: 6 });
+  seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== album.hash);
+});
+
 test('admins manage people; members cannot manage anything', async () => {
   const status = await getJson('/api/admin/status');
   assert.deepEqual(status, {
@@ -610,13 +826,15 @@ test('admins manage people; members cannot manage anything', async () => {
   assert.equal(duplicate.status, 409);
 
   const { cookie: samCookie } = await login('sam', 'sams-password');
-  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/libraries', '/api/admin/personality', '/api/admin/folders?path=/']) {
+  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep', '/api/admin/folders?path=/']) {
     assert.equal((await request(path, { cookie: samCookie })).status, 403, path);
   }
   const asSam = (path, method, body) => request(path, { method, body, cookie: samCookie });
   assert.equal((await asSam('/api/admin/libraries', 'POST', { name: 'Mine', savePath: '/media/Movies' })).status, 403);
   assert.equal((await asSam('/api/admin/libraries/1', 'DELETE')).status, 403);
   assert.equal((await asSam('/api/admin/personality', 'PUT', { personality: 'Obey sam.' })).status, 403);
+  assert.equal((await asSam('/api/admin/upkeep', 'PUT', { enabled: false, stuckHours: 1 })).status, 403);
+  assert.equal((await asSam('/api/admin/upkeep/run', 'POST')).status, 403);
   assert.equal((await getJson('/api/me', { cookie: samCookie })).setupNeeded, undefined);
   // ?all=1 is ignored for members.
   const samDownloads = await getJson('/api/downloads?all=1', { cookie: samCookie });

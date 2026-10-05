@@ -8,6 +8,7 @@ import { createQbittorrent } from './qbittorrent.js';
 import { createApp } from './routes.js';
 import { createSettings } from './settings.js';
 import { createTools } from './tools.js';
+import { createUpkeep } from './upkeep.js';
 
 /** Wires every part of PiRick together from a config object. */
 export function build(config) {
@@ -18,8 +19,9 @@ export function build(config) {
   const qbit = createQbittorrent(config.qbit);
   const conversation = createConversation(db);
   const settings = createSettings(db);
-  const tools = createTools({ config, jackett, qbit, settings });
-  const agent = createAgent({ ollama, tools, conversation, settings });
-  const app = createApp({ config, auth, agent, conversation, tools, settings, ollama, jackett, qbit });
-  return { app, auth, db, settings };
+  const upkeep = createUpkeep({ db, qbit, jackett, settings, config });
+  const tools = createTools({ config, jackett, qbit, settings, upkeep });
+  const agent = createAgent({ ollama, tools, conversation, settings, upkeep });
+  const app = createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit });
+  return { app, auth, db, settings, upkeep };
 }

@@ -18,6 +18,8 @@ test('results spanning several years get a hint to ask, unless the query was spe
   assert.match(differentReleasesNote('Dr Jekyll and Mr Hyde', titles), /1912, 1913, 1920/);
   assert.equal(differentReleasesNote('Dr Jekyll and Mr Hyde 1920', titles), undefined);
   assert.equal(differentReleasesNote('Show S02', ['Show.S02.2019.1080p', 'Show.S02.2020.720p']), undefined);
+  // A remaster carries its own year as well as the film's: still one film.
+  assert.equal(differentReleasesNote('7 chances', ['Seven.Chances.1925.720p.WEB-DL', 'Seven.Chances.2013.REMASTERED.1925.BDRip']), undefined);
   // Resolutions such as 2160p are not years.
   assert.equal(differentReleasesNote('Bunny', ['Bunny.2008.1080p', 'Bunny.2008.2160p']), undefined);
 });

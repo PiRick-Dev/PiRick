@@ -52,6 +52,7 @@ export function toDownload(torrent) {
   const status = statusOf(torrent);
   const active = status === 'downloading' && torrent.eta > 0 && torrent.eta < ETA_UNKNOWN;
   return {
+    hash: torrent.hash,
     name: torrent.name,
     status,
     // Capped so an unfinished download never reads as 100%.
@@ -191,6 +192,17 @@ export function createQbittorrent(config) {
       // An older version answers 404 too, but about the endpoint, not the directory.
       if (res.status === 404 && /directory/i.test(reason)) return { exists: false, names: [] };
       return null;
+    },
+
+    /** Torrents carrying `tag`, exactly as qBittorrent reports them. */
+    tagged: (tag) => info({ tag }),
+
+    /** Removes a torrent from qBittorrent, and its files from disk when asked. */
+    async remove(infoHash, deleteFiles) {
+      await request('/api/v2/torrents/delete', {
+        method: 'POST',
+        body: new URLSearchParams({ hashes: infoHash, deleteFiles: String(Boolean(deleteFiles)) }),
+      });
     },
 
     /** Every folder a torrent is currently set to save into. */

@@ -114,24 +114,23 @@ async function* readEvents(body) {
   }
 }
 
-async function send(text) {
+/**
+ * Posts to a streaming endpoint and shows what comes back as it arrives.
+ * `quiet` is for work nobody asked for: nothing is shown unless there is news.
+ */
+async function runStream(url, body, { quiet = false } = {}) {
   busy = true;
   sendButton.disabled = true;
-  addBubble('user', text);
-  refreshWelcome();
-  setWorking('Thinking…');
-  scrollToEnd();
-
   let bubble = null;
   let reply = '';
   let finished = false;
   try {
     let res;
     try {
-      res = await fetch('/api/chat', {
+      res = await fetch(url, {
         method: 'POST',
         headers: { ...HEADERS, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify(body),
       });
     } catch {
       throw new Error(OFFLINE);
@@ -162,6 +161,7 @@ async function send(text) {
       } else if (event.type === 'status') {
         bubble = null;
         addStatus(event.text, event.kind);
+        refreshWelcome();
       } else if (event.type === 'error') {
         addStatus(event.message, 'error');
         finished = true;
@@ -172,16 +172,36 @@ async function send(text) {
     }
     if (!finished) throw new Error('The connection dropped before PiRick finished. Check Downloads to see what was started.');
   } catch (err) {
-    addStatus(err.message, 'error');
+    if (!quiet) addStatus(err.message, 'error');
   } finally {
     busy = false;
     sendButton.disabled = false;
     setWorking(null);
-    scrollToEnd();
-    // On phones, focusing would pop the keyboard back up over the reply.
-    if (!matchMedia('(pointer: coarse)').matches) input.focus();
+    if (!quiet) scrollToEnd();
   }
 }
+
+async function send(text) {
+  addBubble('user', text);
+  refreshWelcome();
+  setWorking('Thinking…');
+  scrollToEnd();
+  await runStream('/api/chat', { message: text });
+  // On phones, focusing would pop the keyboard back up over the reply.
+  if (!matchMedia('(pointer: coarse)').matches) input.focus();
+}
+
+// When someone comes back, PiRick says what it did to their downloads meanwhile.
+const CATCH_UP_EVERY_MS = 5 * 60 * 1000;
+let lastCatchUp = 0;
+async function catchUp() {
+  if (busy || Date.now() - lastCatchUp < CATCH_UP_EVERY_MS) return;
+  lastCatchUp = Date.now();
+  await runStream('/api/chat/catch-up', {}, { quiet: true });
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') catchUp();
+});
 
 composer.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -239,6 +259,7 @@ const STATUS_LABELS = {
   paused: 'Paused',
   checking: 'Checking the files',
   error: 'Something went wrong, ask the admin',
+  stuck: 'Stuck: looking for another copy',
   unknown: 'Working on it',
 };
 let downloadsTimer = null;
@@ -325,6 +346,7 @@ const TAB_LOADERS = {
   connections: () => loadStatus(),
   libraries: () => loadLibraries(),
   personality: () => loadPersonality(),
+  upkeep: () => loadUpkeep(),
   people: () => loadUsers(),
 };
 
@@ -573,6 +595,68 @@ personalityForm.addEventListener('submit', async (event) => {
   }
 });
 
+// Upkeep
+
+const upkeepForm = $('#upkeep-form');
+const upkeepNote = $('#upkeep-note');
+const UPKEEP_TONES = { replaced: 'ok', 'gave-up': 'bad', problem: 'bad' };
+
+function showUpkeep(state) {
+  upkeepForm.elements.enabled.checked = state.enabled;
+  upkeepForm.elements.stuckHours.value = state.stuckHours;
+  const watching = state.watching === 1 ? '1 unfinished download' : `${state.watching} unfinished downloads`;
+  $('#upkeep-summary').textContent = `Watching ${watching}; ${state.stuck} stuck right now.`;
+  $('#upkeep-empty').hidden = state.log.length > 0;
+  $('#upkeep-log').replaceChildren(
+    ...state.log.map((entry) =>
+      h(
+        'li',
+        { class: UPKEEP_TONES[entry.action] ?? '' },
+        h('span', {}, entry.detail),
+        h('span', { class: 'muted small' }, `${new Date(entry.at).toLocaleString()}${entry.username ? ` · for ${entry.username}` : ''}`),
+      ),
+    ),
+  );
+}
+
+async function loadUpkeep() {
+  try {
+    showUpkeep(await api('/api/admin/upkeep'));
+  } catch (err) {
+    showNote(upkeepNote, err.message, true);
+  }
+}
+
+upkeepForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const body = { enabled: upkeepForm.elements.enabled.checked, stuckHours: Number(upkeepForm.elements.stuckHours.value) };
+    showUpkeep(await api('/api/admin/upkeep', { method: 'PUT', body }));
+    showNote(upkeepNote, 'Saved.', false);
+  } catch (err) {
+    showNote(upkeepNote, err.message, true);
+  }
+});
+
+$('#upkeep-run').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  showNote(upkeepNote, 'Checking…', false);
+  try {
+    const state = await api('/api/admin/upkeep/run', { method: 'POST' });
+    showUpkeep(state);
+    const { result } = state;
+    const message = result.skipped
+      ? 'A check is already running.'
+      : `Checked: ${result.stuck} stuck, ${result.replaced} replaced${result.stuck > result.replaced ? '. The rest are explained below.' : '.'}`;
+    showNote(upkeepNote, message, false);
+  } catch (err) {
+    showNote(upkeepNote, err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // People
 
 function userRow(user) {
@@ -674,6 +758,7 @@ async function start() {
   }
   refreshWelcome();
   scrollToEnd();
+  await catchUp();
 }
 
 start().catch((err) => addStatus(err.message, 'error'));

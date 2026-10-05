@@ -479,7 +479,8 @@ dialog::backdrop {
   color: var(--good);
 }
 
-.downloads .download.error .dl-meta {
+.downloads .download.error .dl-meta,
+.downloads .download.stuck .dl-meta {
   color: var(--danger);
 }
 
@@ -578,8 +579,8 @@ progress {
   }
 
   .tabs button {
-    padding: 8px 7px;
-    font-size: 0.85rem;
+    padding: 8px 5px;
+    font-size: 0.8rem;
   }
 }
 

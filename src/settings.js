@@ -1,6 +1,8 @@
 import { isAbsolutePath, tidyPath } from './folders.js';
 
 export const PERSONALITY_MAX = 1000;
+export const UPKEEP_DEFAULTS = { enabled: true, stuckHours: 6 };
+const STUCK_HOURS_MAX = 168;
 const DESCRIPTION_MAX = 200;
 const PATH_MAX = 500;
 const CATEGORY_MAX = 60;
@@ -34,7 +36,16 @@ export function parseLibrary(input) {
   return { library: { name, description, savePath, perTitle: input?.perTitle === true, category } };
 }
 
-/** Admin-editable settings kept in the database: libraries and the assistant's personality. */
+/** Checks what an admin entered for upkeep. Returns `{ upkeep }` or `{ error }`. */
+export function parseUpkeep(input) {
+  const stuckHours = Number(input?.stuckHours);
+  if (typeof input?.enabled !== 'boolean' || !Number.isInteger(stuckHours) || stuckHours < 1 || stuckHours > STUCK_HOURS_MAX) {
+    return { error: `Choose a whole number of hours between 1 and ${STUCK_HOURS_MAX}.` };
+  }
+  return { upkeep: { enabled: input.enabled, stuckHours } };
+}
+
+/** Admin-editable settings kept in the database: libraries, personality and upkeep. */
 export function createSettings(db) {
   const columns = 'id, name, description, save_path, per_title, category';
   const q = {
@@ -81,6 +92,14 @@ export function createSettings(db) {
     },
 
     removeLibrary: (id) => q.remove.run(id).changes > 0,
+
+    upkeep() {
+      const stored = q.get.get('upkeep')?.value;
+      return { ...UPKEEP_DEFAULTS, ...(stored ? JSON.parse(stored) : {}) };
+    },
+    setUpkeep(value) {
+      q.set.run('upkeep', JSON.stringify(value));
+    },
 
     personality: () => q.get.get('personality')?.value ?? '',
     setPersonality(text) {

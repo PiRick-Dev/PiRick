@@ -74,6 +74,9 @@ export function loadConfig(env = process.env) {
       apiKey: text(env, 'JACKETT_API_KEY'),
       indexer: text(env, 'JACKETT_INDEXER', 'all'),
       timeoutMs: integer(env, 'JACKETT_TIMEOUT_SECONDS', 60, 5, 600) * 1000,
+      // Indexers behind a Cloudflare solver give thin results when asked several things at once.
+      searchesAtOnce: integer(env, 'JACKETT_SEARCHES_AT_ONCE', 1, 1, 5),
+      retryCachedEmpty: oneOf(env, 'JACKETT_RETRY_CACHED_EMPTY', 'true', ['true', 'false']) === 'true',
     },
     qbit: {
       url: baseUrl(env, 'QBIT_URL', 'http://host.docker.internal:8080'),
