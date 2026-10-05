@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Chat with an LLM to find media with Jackett and download it with qBittorrent.",
+  "license": "MIT",
   "engines": {
     "node": ">=22.13"
   },

@@ -368,3 +368,7 @@ npm run bench     # compares Ollama models on PiRick's own job: see "Choosing a 
 | `web/` | Login page, chat page, styles and browser scripts (no build step) |
 | `bench/` | The model benchmark: scenarios, a stand-in indexer, the runner and its report. Not part of the Docker image |
 | `test/` | Tests |
+
+## License
+
+MIT: see [LICENSE](LICENSE). Use it, change it and share it freely. It comes as it is, with no warranty and no support.
