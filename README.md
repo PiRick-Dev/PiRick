@@ -1,14 +1,32 @@
-# PiRick
+<p align="center">
+  <img src="web/static/icon.svg" width="96" height="96" alt="PiRick logo: a skull in a red bandana">
+</p>
+
+<h1 align="center">PiRick</h1>
 
 PiRick is a small web app that lets people ask for something to watch in plain language. An AI model (running in Ollama) searches Jackett, picks a good copy, and adds it to qBittorrent. When the download finishes it appears in Plex. Nobody has to learn Jackett.
 
 Only people with an account can use it. Accounts are created by an admin.
 
-```
-Browser chat ──▶ PiRick ──▶ Ollama (decides what to do)
-                   ├──▶ Jackett      (search)
-                   └──▶ qBittorrent  (download) ──▶ files land in a Plex library folder
-```
+![A chat with PiRick. Two requests in plain words are each followed by status lines saying what was searched for and what started downloading, then a short reply. Behind the chat is a galleon at anchor on a calm sea.](docs/screenshots/chat-day.png)
+
+![How it works, drawn as a treasure hunt. You ask in plain words. Ollama is the captain at the wheel of the ship PiRick and decides what to do. Jackett is the tavern with the map: it searches for a copy. qBittorrent is the crew that digs: it downloads it. The Plex library is the treasure chest, where your shows end up.](docs/how-it-works.svg)
+
+## What it looks like
+
+PiRick works the same on a phone as on a desktop. Everyone gets the chat and a **Downloads** panel that says in plain words how each download is doing. Admins also get the **Admin** screen.
+
+<p align="center">
+  <img src="docs/screenshots/phone-welcome.png" width="31%" alt="The welcome screen on a phone, with buttons to get a movie, get a TV season or check downloads">
+  <img src="docs/screenshots/phone-chat-night.png" width="31%" alt="A chat on a phone in dark mode, with PiRick looking for a season of a show">
+  <img src="docs/screenshots/phone-downloads.png" width="31%" alt="The Downloads panel on a phone: one download in progress, one finished, one stuck and one waiting its turn">
+</p>
+
+The look follows the device's light or dark setting. Dark mode is the same scene at night:
+
+![The same chat in dark mode. The scene is now at night, with stars, a crescent moon, and the ship's windows and lantern lit.](docs/screenshots/chat-night.png)
+
+The waves, clouds and ship move gently. This is done in CSS alone, so an open tab costs very little, and it stays still on a device set to reduce motion.
 
 ## Quick start
 
@@ -107,6 +125,10 @@ Each library has:
 A typical setup is three libraries: Movies (no subfolders), TV and Anime (a subfolder per show).
 
 **Folder checks.** The Folder box suggests real folders as you type, and each library shows whether its folder was found. A folder that differs only in capitals (`/media/tv` when the real one is `/media/TV`) is flagged with a one-click fix. If a library's folder does not exist, downloads into it are refused, because qBittorrent would otherwise create a new, wrongly named folder. These checks need qBittorrent 5; with an older version the row says "Could not check" and the path is used as typed.
+
+<p align="center">
+  <img src="docs/screenshots/libraries.png" width="520" alt="Admin > Libraries with three libraries. Movies and Anime say Folder found. TV points at /media/tv, is flagged as not found, and has a button to use /media/TV.">
+</p>
 
 **One folder per show.** With subfolders on, the assistant names the show and PiRick decides the folder:
 
@@ -370,6 +392,7 @@ npm run bench     # compares Ollama models on PiRick's own job: see "Choosing a 
 | `src/conversation.js`, `src/db.js` | Chat history and the SQLite schema |
 | `web/` | Login page, chat page, styles and browser scripts (no build step) |
 | `bench/` | The model benchmark: scenarios, a stand-in indexer, the runner and its report. Not part of the Docker image |
+| `docs/` | The screenshots and diagram in this README. Not part of the Docker image |
 | `test/` | Tests |
 
 ## License
