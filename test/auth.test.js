@@ -100,6 +100,21 @@ test('one address cannot lock a person out for everyone else', async () => {
   });
 });
 
+test('a claimed address is only believed when the trusted proxy passes it on', async () => {
+  // An over-long password is refused without being hashed, which keeps this quick.
+  const wrong = 'x'.repeat(200);
+  // The proxy is somewhere else, so what this visitor claims is ignored and
+  // every guess counts against the one address it really comes from.
+  await withApp({ TRUST_PROXY: '10.9.8.7' }, async (signIn) => {
+    for (let i = 0; i < 30; i++) assert.equal(await signIn(wrong, `203.0.113.${i}`, `user${i}`), 401);
+    assert.equal(await signIn(wrong, '203.0.113.99', 'someone-else'), 429);
+  });
+  // Here the visitor is the proxy, so the address it passes on is the one used.
+  await withApp({ TRUST_PROXY: '127.0.0.1' }, async (signIn) => {
+    for (let i = 0; i < 31; i++) assert.equal(await signIn(wrong, `203.0.113.${i}`, `user${i}`), 401);
+  });
+});
+
 test('sessions: sign in, look up, sign out, and password change revokes others', async () => {
   const db = openDb(':memory:');
   const auth = createAuth(db, loadConfig({}));

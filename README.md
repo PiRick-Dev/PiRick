@@ -194,6 +194,7 @@ PiRick serves plain HTTP on port 8080 inside the container (8787 on the host). P
 - Keep `TRUST_PROXY=1` when exactly one proxy sits in front of PiRick. PiRick then uses the visitor's real address for login lockouts and marks the session cookie `Secure`. Use `2` for two proxies (for example Cloudflare in front of your own proxy). Use `false` if people connect directly with no proxy.
 - The proxy must pass `X-Forwarded-For` and `X-Forwarded-Proto`. Nginx Proxy Manager, Traefik and Caddy do this by default.
 - If the proxy is on the same machine, change the port line in `docker-compose.yml` to `"127.0.0.1:8787:8080"` so PiRick cannot be reached around the proxy.
+- A number tells PiRick to believe whoever connects to it. That is only right when the proxy is the only thing that can reach PiRick's port. If the port is open to your network as well (the proxy is on another machine, say), anyone who connects to it directly can claim to be any address, and the login lockouts stop working. Set `TRUST_PROXY` to the proxy's own address instead, such as `TRUST_PROXY=10.0.0.5`, or to a subnet such as `172.16.0.0/12`. PiRick then ignores what anyone else claims. Do not use `true`: it believes any address a visitor claims, even through a proxy.
 - Replies are streamed. PiRick asks nginx not to buffer them and sends a heartbeat every 15 seconds, so default proxy timeouts are fine.
 
 Caddy:
@@ -272,7 +273,7 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `QBIT_URL` | qBittorrent Web UI address | `http://host.docker.internal:8080` |
 | `QBIT_USERNAME`, `QBIT_PASSWORD` | qBittorrent Web UI login | none |
 | `MAX_TORRENT_SIZE_GB` | Refuse anything larger; `0` = no limit | `0` |
-| `TRUST_PROXY` | Number of reverse proxies in front of PiRick, or `false` | `false` (`1` in `.env.example`) |
+| `TRUST_PROXY` | Number of reverse proxies in front of PiRick, the proxy's address, or `false` | `false` (`1` in `.env.example`) |
 | `COOKIE_SECURE` | `auto`, `true` or `false` | `auto` |
 | `SESSION_IDLE_DAYS`, `SESSION_MAX_DAYS` | Sign out after this long unused / regardless | `7`, `30` |
 | `LOG_LEVEL` | `debug`, `info`, `warn` or `error` | `info` |
