@@ -140,7 +140,9 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     const name = username.toLowerCase().slice(0, 64);
     const pair = `pair:${req.ip}|${name}`;
     // Counted before the password is checked, so parallel guesses cannot slip past.
-    const wait = attempts.hit([[`ip:${req.ip}`, 30], [`user:${name}`, 20], [pair, 5]]);
+    // The pair comes before the username: guesses from an address that is already
+    // blocked stop there, so one address cannot lock a person out for everyone.
+    const wait = attempts.hit([[`ip:${req.ip}`, 30], [pair, 5], [`user:${name}`, 20]]);
     if (wait) {
       log.warn('login blocked', { username: name, ip: req.ip });
       return tooMany(res, wait);

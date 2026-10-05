@@ -68,8 +68,10 @@ function readSessionCookie(req) {
 }
 
 /**
- * Fixed-window attempt counter. `hit` takes [key, max] pairs, most general first,
- * and returns the seconds to wait if any is over its limit (0 when allowed).
+ * Fixed-window attempt counter. `hit` takes [key, max] pairs and returns the
+ * seconds to wait if any is over its limit (0 when allowed). They are counted
+ * in the order given, and the ones after the first that is over are not counted
+ * at all, so the order decides what a blocked attempt can still use up.
  */
 export function createRateLimiter({ windowMs, maxKeys = 50_000 }) {
   const hits = new Map();

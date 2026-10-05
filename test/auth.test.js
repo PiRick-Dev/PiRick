@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import {
   createAuth,
@@ -8,11 +9,39 @@ import {
   validateUsername,
   verifyPassword,
 } from '../src/auth.js';
+import { build } from '../src/build.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 
 function fakeRequest(cookie) {
   return { headers: cookie ? { cookie } : {}, secure: false };
+}
+
+/**
+ * A running PiRick with one account, "dana". `signIn(password, address)` resolves
+ * to the status of a sign-in that claims to come from `address`.
+ */
+async function withApp(env, run) {
+  const config = loadConfig(env);
+  config.dbFile = ':memory:';
+  const { app, auth } = build(config);
+  await auth.createUser('dana', 'password-one', 'user');
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const signIn = async (password, address, username = 'dana') => {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PiRick': '1', 'X-Forwarded-For': address },
+      body: JSON.stringify({ username, password }),
+    });
+    return res.status;
+  };
+  try {
+    await run(signIn);
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
 }
 
 function fakeResponse() {
@@ -58,6 +87,17 @@ test('rate limiter blocks after the limit and stops at the first exceeded key', 
   assert.equal(limiter.hit([['never-counted', 1]]), 0);
   limiter.reset('ip');
   assert.equal(limiter.hit([['ip', 3]]), 0);
+});
+
+test('one address cannot lock a person out for everyone else', async () => {
+  await withApp({ TRUST_PROXY: '1' }, async (signIn) => {
+    const statuses = [];
+    for (let i = 0; i < 25; i++) statuses.push(await signIn('wrong-password', '203.0.113.5'));
+    assert.deepEqual(statuses.slice(0, 5), Array(5).fill(401));
+    assert.deepEqual(statuses.slice(5), Array(20).fill(429), 'that address is blocked for this username');
+    // Its blocked guesses did not count against the username, so the real person still gets in.
+    assert.equal(await signIn('password-one', '192.0.2.77'), 200);
+  });
 });
 
 test('sessions: sign in, look up, sign out, and password change revokes others', async () => {
