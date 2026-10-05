@@ -1,7 +1,8 @@
+# Runs the image GitHub builds from the main branch. To build from this folder
+# instead, see docker-compose.build.yml.
 services:
   pirick:
-    build: .
-    image: pirick:latest
+    image: ghcr.io/pirick-dev/pirick:latest
     container_name: pirick
     restart: unless-stopped
     env_file: .env

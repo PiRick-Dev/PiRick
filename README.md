@@ -32,7 +32,7 @@ The waves, clouds and ship move gently. This is done in CSS alone, so an open ta
 
 You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere PiRick can reach.
 
-1. Copy the example settings and fill them in:
+1. Put `docker-compose.yml` and `.env.example` from this repository in a folder (clone it, or download just those two files). Copy the example settings and fill them in:
 
    ```
    cp .env.example .env
@@ -40,10 +40,10 @@ You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere 
 
    At minimum set `JACKETT_API_KEY`, `QBIT_USERNAME`, `QBIT_PASSWORD`, and check the three URLs and `OLLAMA_MODEL`.
 
-2. Build and start:
+2. Start it. This downloads the ready-made image; nothing is built on your machine:
 
    ```
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 3. Get the admin password. If you left `ADMIN_PASSWORD` empty, PiRick made one and printed it once:
@@ -70,43 +70,14 @@ The URLs in `.env` are used from inside the PiRick container.
 
 On Linux, Ollama listens only on `127.0.0.1` by default, where containers cannot reach it. Ollama has no login of its own, so anyone who can reach its port can use it. If it runs on the same machine as PiRick, set `OLLAMA_HOST` for the Ollama service to the Docker bridge address (usually `172.17.0.1`), so only containers on that machine can reach it. If it runs on another machine it needs `OLLAMA_HOST=0.0.0.0`; add a firewall rule there that lets only the PiRick machine reach port 11434.
 
-## Running it on another machine from a registry
+## The image: updates, versions and stack managers
 
-`docker-compose.yml` builds the image from this folder, so it only works where the source is. To run PiRick somewhere else, such as a stack in Dockge or Portainer, push the image to a registry and deploy a compose file that has `image:` and no `build:`.
+`docker-compose.yml` runs `ghcr.io/pirick-dev/pirick:latest`. GitHub builds that image from the `main` branch, for x86-64 and ARM64, each time something is merged into it.
 
-```
-docker build -t registry.example.com/pirick:latest .
-docker push registry.example.com/pirick:latest
-```
-
-```yaml
-services:
-  pirick:
-    image: registry.example.com/pirick:latest
-    container_name: pirick
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - 8787:8080
-    volumes:
-      - pirick-data:/data
-    extra_hosts:
-      - host.docker.internal:host-gateway
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-volumes:
-  pirick-data:
-```
-
-- Put your settings in the stack's `.env` (Dockge has a box for it next to the compose file).
-- Leaving `build: .` in the file makes Compose try to build on a machine that has no Dockerfile, and the deploy fails.
-- With a private registry, the Docker client that runs Compose has to be logged in. Dockge runs its own client inside its container, so a login on the host (or in TrueNAS) does not count: the pull fails with `no basic auth credentials`. Run `docker login <registry>` inside the Dockge container, for example `docker exec -it <dockge container> docker login <registry>` from the host. That login is lost if the Dockge container is recreated.
-- The new instance starts with an empty database. Its first-run admin password is in the stack's log, and libraries and people have to be added again.
+- **Updating.** `docker compose pull`, then `docker compose up -d`. Accounts, libraries and chat history live in the `pirick-data` volume and are kept.
+- **Staying on one build.** Every build is also tagged with its commit, for example `ghcr.io/pirick-dev/pirick:sha-1a2b3c4`. Put such a tag in `image:` to stop getting updates, or to go back to an earlier build. The tags are listed under **Packages** on the repository's page.
+- **Dockge, Portainer and other stack managers.** Paste `docker-compose.yml` in as the stack and put your settings in the stack's `.env` (Dockge has a box for it next to the compose file). A new instance starts with an empty database: its first-run admin password is in the stack's log, and libraries and people have to be added again.
+- **Your own build.** `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` builds from this folder instead of downloading. To run your build on another machine, push it to a registry of your own and change `image:` to match. With a private registry, the Docker client that runs Compose has to be logged in. Dockge runs its own client inside its container, so a login on the host does not count and the pull fails with `no basic auth credentials`: run `docker exec -it <dockge container> docker login <registry>`, and again whenever that container is recreated.
 
 ## Libraries: where downloads go
 
@@ -361,7 +332,7 @@ Admins see the technical reason for a failure in the chat itself. Other people g
 
 Earlier versions chose a qBittorrent category per media type (`movies`, `tv`, …) from `.env`, which made qBittorrent create folders with those names. That is gone.
 
-1. Rebuild: `docker compose up -d --build`. Accounts and chat history are kept.
+1. Update: `docker compose pull`, then `docker compose up -d`. Accounts and chat history are kept.
 2. Add your libraries under **Admin > Libraries**. Downloads are refused until you do.
 3. Remove the `QBIT_CATEGORY_*` and `QBIT_SAVEPATH_*` lines from `.env`. They are ignored, and PiRick logs a reminder while they remain.
 4. In qBittorrent, move anything that landed in a stray folder such as lowercase `tv`, then delete that folder and the categories PiRick caused (`tv`, `movies`, `music`, `books`) if you do not use them.
@@ -376,6 +347,8 @@ npm test          # unit tests plus a full run against stand-in Ollama, Jackett 
 npm run dev       # runs from .env with auto-reload; data goes to ./data
 npm run bench     # compares Ollama models on PiRick's own job: see "Choosing a model"
 ```
+
+Work happens on the `dev` branch. `main` is what the published image is built from, so it only changes through a pull request from `dev`. GitHub runs the tests on every push to either branch and builds the image on every pull request; a merge into `main` publishes it (`.github/workflows/ci.yml`).
 
 | Path | What is there |
 |---|---|

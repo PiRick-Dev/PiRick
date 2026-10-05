@@ -1,0 +1,7 @@
+# Builds PiRick from this folder instead of pulling the published image:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  pirick:
+    build: .
+    image: pirick:local
