@@ -1,5 +1,6 @@
 import { UpstreamError, describeError } from './errors.js';
 import { baseNames } from './folders.js';
+import { cleanTitle } from './releases.js';
 
 export const BASE_TAG = 'pirick';
 const ETA_UNKNOWN = 8_640_000;
@@ -129,7 +130,9 @@ export function createQbittorrent(config) {
 
   async function info(params) {
     const res = await request(`/api/v2/torrents/info?${new URLSearchParams(params)}`);
-    return res.json();
+    // A torrent's name is whatever its maker typed, which need not be the title
+    // it was listed under. It is shown to people and read by the model.
+    return (await res.json()).map((torrent) => ({ ...torrent, name: cleanTitle(torrent.name) }));
   }
 
   return {
@@ -194,7 +197,7 @@ export function createQbittorrent(config) {
       return null;
     },
 
-    /** Torrents carrying `tag`, exactly as qBittorrent reports them. */
+    /** Torrents carrying `tag`, as qBittorrent reports them apart from a tidied name. */
     tagged: (tag) => info({ tag }),
 
     /** Removes a torrent from qBittorrent, and its files from disk when asked. */

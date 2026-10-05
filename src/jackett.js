@@ -1,5 +1,6 @@
 import { UpstreamError, describeError } from './errors.js';
 import { log } from './log.js';
+import { cleanTitle } from './releases.js';
 
 const MAX_TORRENT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -24,11 +25,6 @@ export function normaliseHash(value) {
 export function hashFromMagnet(magnet) {
   const match = /[?&]xt=urn:btih:([a-z0-9]+)/i.exec(magnet ?? '');
   return match ? normaliseHash(match[1]) : null;
-}
-
-function cleanTitle(title) {
-  // Titles come from the internet: drop control characters and cap the length.
-  return String(title ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
 // qBittorrent takes links as a list, one to a line, so a magnet with a line

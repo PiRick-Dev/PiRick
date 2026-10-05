@@ -12,6 +12,15 @@ const COMPLETE_SERIES = /\b(?:complete (?:series|collection|show|saga|box ?set)|
 const COMPLETE_ALONE = /\bcomplete\b(?! ?(?:bluray|blu ray|uhd|bd|dvd))/i;
 const POOR_COPY = /\b(?:CAM|CAMRip|HDCAM|TS|HDTS|TELESYNC|TC|TELECINE|SCR|SCREENER)\b/;
 
+/**
+ * Tidies a name that came from the internet, whether an indexer's title for a
+ * release or the name inside a torrent: one line, no control characters, and a
+ * length that cannot crowd out everything else the model is told.
+ */
+export function cleanTitle(title) {
+  return String(title ?? '').replace(/\p{Cc}+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
 const range = (first, last) => Array.from({ length: last - first + 1 }, (unused, i) => first + i);
 const pad = (number) => String(number).padStart(2, '0');
 
