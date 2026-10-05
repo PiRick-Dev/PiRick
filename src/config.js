@@ -37,6 +37,15 @@ function oneOf(env, name, fallback, allowed) {
   return value;
 }
 
+// Empty leaves thinking to the model. Some models take on or off, others a level.
+function think(env) {
+  const raw = text(env, 'OLLAMA_THINK').toLowerCase();
+  if (!raw) return undefined;
+  if (raw === 'true' || raw === 'false') return raw === 'true';
+  if (['low', 'medium', 'high'].includes(raw)) return raw;
+  throw new Error(`OLLAMA_THINK must be empty, true, false, low, medium or high (got "${raw}")`);
+}
+
 // Express accepts a boolean, a hop count, or a list of trusted addresses.
 function trustProxy(env) {
   const raw = text(env, 'TRUST_PROXY', 'false');
@@ -66,6 +75,7 @@ export function loadConfig(env = process.env) {
       model: text(env, 'OLLAMA_MODEL', 'gemma4:e4b'),
       apiKey: text(env, 'OLLAMA_API_KEY'),
       numCtx: integer(env, 'OLLAMA_NUM_CTX', 8192, 2048, 262144),
+      think: think(env),
       keepAlive: text(env, 'OLLAMA_KEEP_ALIVE'),
       timeoutMs: integer(env, 'OLLAMA_TIMEOUT_SECONDS', 300, 10, 3600) * 1000,
     },

@@ -25,7 +25,13 @@ async function errorText(res) {
   }
 }
 
-export function createOllama(config) {
+const toMs = (nanoseconds) => Math.round((nanoseconds ?? 0) / 1e6);
+
+/**
+ * `config.think` and `config.seed` are passed to Ollama when set. `onUsage`
+ * is told what each reply cost: the token counts and timings Ollama reports.
+ */
+export function createOllama(config, { onUsage } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
 
@@ -43,12 +49,11 @@ export function createOllama(config) {
      * resolved value is the complete assistant message, including any tool calls.
      */
     async chat({ messages, tools, onDelta }) {
-      const body = {
-        model: config.model,
-        messages,
-        stream: true,
-        options: { num_ctx: config.numCtx, temperature: 0.2 },
-      };
+      const options = { num_ctx: config.numCtx, temperature: 0.2 };
+      if (config.seed != null) options.seed = config.seed;
+      const body = { model: config.model, messages, stream: true, options };
+      // Left out, a thinking model decides for itself, which usually means it thinks.
+      if (config.think != null) body.think = config.think;
       if (tools?.length) body.tools = tools;
       if (config.keepAlive) body.keep_alive = config.keepAlive;
 
@@ -65,11 +70,15 @@ export function createOllama(config) {
         if (/does not support tools/i.test(reason)) {
           throw new UpstreamError('ollama', `Model "${config.model}" cannot call tools; set OLLAMA_MODEL to one that can`);
         }
+        if (/does not support thinking|think value/i.test(reason)) {
+          throw new UpstreamError('ollama', `Model "${config.model}" does not accept OLLAMA_THINK=${config.think}; clear it or use a value the model supports`);
+        }
         throw new UpstreamError('ollama', `Ollama returned HTTP ${res.status}: ${reason.slice(0, 300)}`);
       }
 
       let content = '';
       let thinking = '';
+      let last = null;
       const toolCalls = [];
       try {
         for await (const chunk of ndjson(res.body)) {
@@ -82,6 +91,7 @@ export function createOllama(config) {
             onDelta?.(text);
           }
           if (chunk.message?.tool_calls) toolCalls.push(...chunk.message.tool_calls);
+          if (chunk.done) last = chunk;
         }
       } catch (err) {
         if (err instanceof UpstreamError) throw err;
@@ -93,6 +103,15 @@ export function createOllama(config) {
         content,
         tools: toolCalls.map((call) => `${call.function?.name}(${JSON.stringify(call.function?.arguments)})`),
         thinking: thinking.slice(-600),
+      });
+      onUsage?.({
+        promptTokens: last?.prompt_eval_count ?? 0,
+        outputTokens: last?.eval_count ?? 0,
+        loadMs: toMs(last?.load_duration),
+        promptMs: toMs(last?.prompt_eval_duration),
+        outputMs: toMs(last?.eval_duration),
+        thinkingChars: thinking.length,
+        contentChars: content.length,
       });
       const message = { role: 'assistant', content };
       if (toolCalls.length) message.tool_calls = toolCalls;

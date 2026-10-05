@@ -219,11 +219,34 @@ location / {
 
 ## Choosing a model
 
-`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. PiRick was developed and tested with `gemma4:e4b`.
+`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. PiRick was developed with `gemma4:e4b`, which is the default.
 
 Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
 
 If a model behaves badly, set `LOG_LEVEL=debug` to see each step it takes in `docker compose logs pirick`, or try a larger model.
+
+### Comparing models
+
+`npm run bench` puts Ollama models through PiRick's own job and ranks them, so a new model can be judged on more than a hunch. It needs Node.js on a machine that can reach Ollama; it is not part of the Docker image.
+
+```
+npm run bench -- --models gemma4:e4b,gemma4:12b     # every scenario twice for each model
+npm run bench -- --models gemma4:12b --passes 5     # carry on up to five passes
+npm run bench -- --models gemma4:12b --think off    # the same model with thinking switched off
+npm run bench -- --report                           # rebuild the report from the saved runs
+```
+
+Each run builds a throwaway PiRick in memory, with the real prompt, tools and reply check, and sends it one of 36 requests: films and shows asked for plainly, vaguely, misspelt or in Spanish; requests where it should ask first; downloads that fail; a search result that is an advert and one that carries instructions for the AI; a personality to keep up. Jackett and qBittorrent are stand-ins inside the benchmark, which is never told where the real ones are, so nothing is searched for or downloaded. A run is judged by what happened, such as which release reached the stand-in qBittorrent and in which folder, not by a second AI's opinion of the wording. A model that checks before downloading ("shall I get the 1080p one?") is told yes and judged on what it does next: checking first is counted, but only failing to follow through is a failure.
+
+Results go to `bench/results/main/`: `report.md` ranks the models and `transcripts/` holds every conversation. For each model the report gives how often it did the right thing, its critical failures (the wrong thing downloaded, a download without asking when it should have asked, a false "it's downloading"), how often PiRick had to correct it behind the scenes, how long a request took, how many searches it made, and how much memory it used.
+
+Things to know:
+
+- Runs are saved as they finish. Stop it whenever you like; the same command carries on where it was.
+- It reads `OLLAMA_URL` and `OLLAMA_NUM_CTX` from `.env`. Models must already be pulled.
+- While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded are repeated.
+- Speed is the model's alone, because the stand-in indexer answers instantly. On a real setup add the time of each search.
+- Scenarios, their checks and the stand-in indexer's contents are in `bench/scenarios.js` and `bench/corpus.js`. `npm test` proves every scenario can be passed and that known mistakes are caught.
 
 ## Settings
 
@@ -235,6 +258,7 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `OLLAMA_URL` | Ollama address | `http://host.docker.internal:11434` |
 | `OLLAMA_MODEL` | Model to use; must support tools | `gemma4:e4b` |
 | `OLLAMA_NUM_CTX` | Context window in tokens | `8192` |
+| `OLLAMA_THINK` | Whether a thinking model reasons before answering: `false`, `true`, or `low`/`medium`/`high` for models that take a level | the model's default |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama keeps the model loaded, e.g. `30m` | Ollama's default |
 | `OLLAMA_API_KEY` | Bearer token, if your Ollama needs one | none |
 | `OLLAMA_TIMEOUT_SECONDS` | Give up on a reply after this long | `300` |
@@ -325,6 +349,7 @@ Needs Node.js 22.13 or newer. Express is the only dependency.
 npm install
 npm test          # unit tests plus a full run against stand-in Ollama, Jackett and qBittorrent servers
 npm run dev       # runs from .env with auto-reload; data goes to ./data
+npm run bench     # compares Ollama models on PiRick's own job: see "Choosing a model"
 ```
 
 | Path | What is there |
@@ -341,4 +366,5 @@ npm run dev       # runs from .env with auto-reload; data goes to ./data
 | `src/settings.js`, `src/folders.js` | Libraries and personality; folder naming, matching and checks |
 | `src/conversation.js`, `src/db.js` | Chat history and the SQLite schema |
 | `web/` | Login page, chat page, styles and browser scripts (no build step) |
+| `bench/` | The model benchmark: scenarios, a stand-in indexer, the runner and its report. Not part of the Docker image |
 | `test/` | Tests |
