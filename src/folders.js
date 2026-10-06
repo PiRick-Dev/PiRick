@@ -130,6 +130,20 @@ export function splitPath(path) {
   return { parent: root ? tidy.slice(0, cut + 1) : parent, name: tidy.slice(cut + 1) };
 }
 
+/**
+ * The folder names that lead from `parent` down to `child` (none when they are
+ * the same folder), or null when `child` is not inside `parent`.
+ */
+export function pathBelow(parent, child) {
+  const names = (path) => tidyPath(path).split(/[/\\]+/).filter(Boolean);
+  const from = names(parent);
+  const to = names(child);
+  // Windows does not tell capitals apart in paths.
+  const fold = (name) => (usesBackslash(String(parent)) ? name.toLowerCase() : name);
+  if (!to.length || to.length < from.length || from.some((name, i) => fold(name) !== fold(to[i]))) return null;
+  return to.slice(from.length);
+}
+
 /** The last part of each path, whichever separator it uses. */
 export function baseNames(paths) {
   return paths.map((path) => splitPath(path).name).filter(Boolean);

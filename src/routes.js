@@ -5,8 +5,9 @@ import { PASSWORD_MAX, createRateLimiter, validatePassword, validateUsername } f
 import { UpstreamError, describeError } from './errors.js';
 import { checkFolder, isAbsolutePath, joinPath, splitPath, tidyPath } from './folders.js';
 import { log } from './log.js';
+import { matchLibrary } from './plex.js';
 import { BASE_TAG, userTag } from './qbittorrent.js';
-import { PERSONALITY_MAX, parseLibrary, parseUpkeep } from './settings.js';
+import { PERSONALITY_MAX, parseLibrary, parsePlexChoice, parseUpkeep } from './settings.js';
 
 const WEB_DIR = fileURLToPath(new URL('../web', import.meta.url));
 const MAX_MESSAGE_LENGTH = 2000;
@@ -41,7 +42,7 @@ function explain(err, user) {
   return user.role === 'admin' ? `${friendly} (${describeError(err)})` : friendly;
 }
 
-export function createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit }) {
+export function createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit, plex }) {
   const app = express();
   const attempts = createRateLimiter({ windowMs: ATTEMPT_WINDOW_MS });
   const busy = new Set();
@@ -249,10 +250,13 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     try {
       const downloads = await qbit.list(everyone ? BASE_TAG : userTag(req.user.username));
       const stuck = upkeep.stuckHashes();
+      const inPlex = upkeep.inPlex();
       res.json({
         downloads: downloads.slice(0, 100).map(({ hash, requestedBy, ...item }) => ({
           ...item,
           ...(stuck.has(hash) && { status: 'stuck', etaSeconds: null }),
+          // Only said of the ones Plex has actually been asked to pick up.
+          ...(inPlex.has(hash) && item.status === 'finished' && { inPlex: true }),
           // Who asked for what is only for an admin looking at everyone's.
           ...(everyone && { requestedBy }),
         })),
@@ -276,8 +280,10 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
         return { ok: false, detail: err instanceof UpstreamError ? err.message : describeError(err) };
       }
     };
-    const [ollamaStatus, jackettStatus, qbitStatus] = await Promise.all([probe(ollama), probe(jackett), probe(qbit)]);
-    res.json({ ollama: ollamaStatus, jackett: jackettStatus, qbittorrent: qbitStatus });
+    // Plex is optional: left out of .env, it is reported as switched off, not as broken.
+    const plexProbe = plex.enabled ? probe(plex) : { off: true, detail: 'Not connected. Set PLEX_URL and PLEX_TOKEN to connect it.' };
+    const [ollamaStatus, jackettStatus, qbitStatus, plexStatus] = await Promise.all([probe(ollama), probe(jackett), probe(qbit), plexProbe]);
+    res.json({ ollama: ollamaStatus, jackett: jackettStatus, qbittorrent: qbitStatus, plex: plexStatus });
   });
 
   // ---- Admin: libraries --------------------------------------------------------
@@ -301,7 +307,37 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     return libraries.map((library) => ({ ...library, folder: checkFolder(library.savePath, siblings.get(parentOf(library))) }));
   }
 
-  admin.get('/libraries', async (req, res) => res.json({ libraries: await withFolderChecks(settings.libraries()) }));
+  /**
+   * With Plex connected, adds to each library the Plex folder it matches
+   * (`plex`: `{ title, path, chosen }` or `{ none: true, chosen }`), and returns
+   * every Plex folder there is to choose from.
+   */
+  async function withPlex(libraries) {
+    if (!plex.enabled) return { libraries };
+    let plexLibraries;
+    try {
+      plexLibraries = await plex.libraries({ fresh: true });
+    } catch (err) {
+      log.warn('could not list the Plex libraries', { error: describeError(err) });
+      return { libraries, plex: { error: err instanceof UpstreamError ? err.message : describeError(err) } };
+    }
+    const folders = plexLibraries.flatMap(({ key, title, folders: paths }) => paths.map((path) => ({ key, title, path })));
+    return {
+      libraries: libraries.map((library) => {
+        const choice = settings.plexChoice(library.id);
+        const match = matchLibrary(library, plexLibraries, choice);
+        // "chosen" is what the admin picked, which the match can fall back from if that folder has gone.
+        const chosen = choice?.none ? 'none' : match?.chosen ? 'folder' : 'auto';
+        return { ...library, plex: match ? { key: match.key, title: match.title, path: match.path, chosen } : { none: true, chosen } };
+      }),
+      plex: { folders },
+    };
+  }
+
+  admin.get('/libraries', async (req, res) => res.json(await withPlex(await withFolderChecks(settings.libraries()))));
+
+  /** One library as the admin screen shows it, with its folder check and its Plex match. */
+  const described = async (library) => (await withPlex(await withFolderChecks([library]))).libraries[0];
 
   admin.post('/libraries', async (req, res) => {
     const { library, error } = parseLibrary(req.body);
@@ -309,7 +345,7 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     const saved = settings.addLibrary(library);
     if (!saved) return res.status(409).json({ error: 'There is already a library with that name.' });
     log.info('library added', { name: saved.name, path: saved.savePath, by: req.user.username });
-    res.status(201).json({ library: (await withFolderChecks([saved]))[0] });
+    res.status(201).json({ library: await described(saved) });
   });
 
   admin.param('libraryId', (req, res, next, id) => {
@@ -324,7 +360,16 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     const saved = settings.updateLibrary(req.library.id, library);
     if (!saved) return res.status(409).json({ error: 'There is already a library with that name.' });
     log.info('library changed', { name: saved.name, path: saved.savePath, by: req.user.username });
-    res.json({ library: (await withFolderChecks([saved]))[0] });
+    res.json({ library: await described(saved) });
+  });
+
+  // Which Plex folder a library's downloads end up in, when PiRick's own match is wrong.
+  admin.put('/libraries/:libraryId/plex', async (req, res) => {
+    const { choice, error } = parsePlexChoice(req.body);
+    if (error) return res.status(400).json({ error });
+    settings.setPlexChoice(req.library.id, choice);
+    log.info('library matched to Plex', { name: req.library.name, plex: choice?.none ? 'none' : (choice?.path ?? 'automatic'), by: req.user.username });
+    res.json({ library: await described(req.library) });
   });
 
   admin.delete('/libraries/:libraryId', (req, res) => {

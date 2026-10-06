@@ -1,5 +1,5 @@
 // A throwaway PiRick for one benchmark run: the real agent, prompt and tools,
-// with in-process stand-ins for Jackett and qBittorrent and a record of
+// with in-process stand-ins for Jackett, qBittorrent and Plex and a record of
 // everything the model did. Nothing here can reach a real service except the
 // model it is handed.
 import { createAgent } from '../src/agent.js';
@@ -8,11 +8,13 @@ import { createConversation } from '../src/conversation.js';
 import { openDb } from '../src/db.js';
 import { UpstreamError, describeError } from '../src/errors.js';
 import { hashFromMagnet } from '../src/jackett.js';
+import { createPlex } from '../src/plex.js';
 import { BASE_TAG, toDownload, userTag } from '../src/qbittorrent.js';
 import { createSettings } from '../src/settings.js';
 import { createTools } from '../src/tools.js';
 import { createUpkeep } from '../src/upkeep.js';
 import { byHash, byTitle, search } from './corpus.js';
+import { PLEX_TOKEN, PLEX_URL, plexStandIn } from './plex.js';
 
 const USERNAME = 'alice';
 /** A request that is still going after this long has failed, whatever comes back. */
@@ -48,6 +50,10 @@ const MARKUP = /^\s*#{1,6}\s|^\s*\|.*\|\s*$|\]\(https?:/m;
  *   failAdds     qBittorrent refuses every new download
  *   personality  the admin's personality text
  *   notes        what upkeep did while the user was away
+ *   plex         connects a Plex server that already has { films: [{ title, year }],
+ *                shows: [{ title, year, seasons: { 1: 10 } }] }. Without it PiRick
+ *                runs with no Plex, as it does when none is set up
+ *   folders      folders on disk besides the usual ones: { '/media/TV': ['Name'] }
  * `connect(onUsage)` returns the model: an object with `chat()`, as createOllama gives.
  */
 export function createWorld(setup = {}, connect) {
@@ -84,8 +90,19 @@ export function createWorld(setup = {}, connect) {
     };
   });
 
+  const folders = Object.fromEntries(Object.entries(FOLDERS).map(([path, names]) => [path, [...names, ...(setup.folders?.[path] ?? [])]]));
+  // Plex sees the same folders under another path, as it does from inside its own container.
+  const plexServer = setup.plex
+    ? plexStandIn([
+        { key: '1', title: 'Films', type: 'movie', folders: ['/data/Movies'], items: setup.plex.films ?? [] },
+        { key: '2', title: 'TV Shows', type: 'show', folders: ['/data/TV'], items: setup.plex.shows ?? [] },
+        { key: '3', title: 'Anime', type: 'show', folders: ['/data/Anime'], items: [] },
+      ])
+    : null;
+  const plex = createPlex(plexServer ? { url: PLEX_URL, token: PLEX_TOKEN, timeoutMs: 5000 } : { url: '', token: '' }, { fetch: plexServer?.fetch });
+
   const qbit = {
-    listFolders: async (path) => (Object.hasOwn(FOLDERS, path) ? { exists: true, names: [...FOLDERS[path]] } : { exists: false, names: [] }),
+    listFolders: async (path) => (Object.hasOwn(folders, path) ? { exists: true, names: [...folders[path]] } : { exists: false, names: [] }),
     savePaths: async () => [...new Set(torrents.map((torrent) => torrent.save_path))],
     async find(hash) {
       const torrent = torrents.find((entry) => entry.hash === hash);
@@ -115,8 +132,8 @@ export function createWorld(setup = {}, connect) {
 
   // An in-process indexer answers instantly, which the finder would otherwise take for a cached answer.
   const config = loadConfig({ JACKETT_RETRY_CACHED_EMPTY: 'false' });
-  const upkeep = createUpkeep({ db, qbit, jackett, settings, config });
-  const realTools = createTools({ config, jackett, qbit, settings, upkeep });
+  const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex });
+  const realTools = createTools({ config, jackett, qbit, settings, upkeep, plex });
   const tools = {
     ...realTools,
     async run(who, call, turn) {
@@ -150,7 +167,7 @@ export function createWorld(setup = {}, connect) {
       return reply;
     },
   };
-  const agent = createAgent({ ollama, tools, conversation: createConversation(db), settings, upkeep });
+  const agent = createAgent({ ollama, tools, conversation: createConversation(db), settings, upkeep, plex });
 
   /** A new request from the user. Everything PiRick does about it is recorded in one place. */
   function begin(text) {
@@ -216,6 +233,9 @@ export function createWorld(setup = {}, connect) {
         },
       };
     },
+
+    /** The stand-in Plex server, when the scenario has one. */
+    plexServer,
 
     close() {
       db.close();

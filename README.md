@@ -52,7 +52,7 @@ You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere 
    docker compose logs pirick
    ```
 
-4. Open `http://<this-machine>:8787`, sign in as `admin`, and open **Admin**. The **Connections** section shows whether Ollama, Jackett and qBittorrent are reachable, with the reason if not. Fix `.env` and run `docker compose up -d` again until all three are green.
+4. Open `http://<this-machine>:8787`, sign in as `admin`, and open **Admin**. The **Connections** section shows whether Ollama, Jackett and qBittorrent are reachable, with the reason if not. Fix `.env` and run `docker compose up -d` again until all three are green. Plex is listed there too. It is optional, and reads "Not connected" until you set it up: see "Connecting Plex".
 
 5. Open **Admin > Libraries** and add the folders downloads should go into, for example Movies, TV and Anime. PiRick refuses to download until at least one exists. See "Libraries" below.
 
@@ -81,7 +81,7 @@ On Linux, Ollama listens only on `127.0.0.1` by default, where containers cannot
 
 ## Libraries: where downloads go
 
-PiRick does not talk to Plex. A download shows up in Plex because qBittorrent saves it inside a folder that a Plex library watches. You tell PiRick which folders those are under **Admin > Libraries**. PiRick only ever saves into a folder listed there. It never invents a folder or a qBittorrent category, and until at least one library exists it refuses to download.
+A download shows up in Plex because qBittorrent saves it inside a folder that a Plex library watches. You tell PiRick which folders those are under **Admin > Libraries**. PiRick only ever saves into a folder listed there. It never invents a folder or a qBittorrent category, and until at least one library exists it refuses to download. None of this needs a connection to Plex; "Connecting Plex" says what one adds.
 
 Each library has:
 
@@ -148,9 +148,13 @@ Things to know:
 - When two different shows share a name (say a 1963 and a 2005 series), PiRick does not mix them: it asks which one is meant.
 - Release names that cannot be read (unusual naming) are left out of these plans.
 
-## Upkeep: stuck downloads
+## Upkeep: finished and stuck downloads
 
-PiRick checks its own downloads every 10 minutes: everything in qBittorrent tagged `pirick`, including downloads added before this feature existed. A download is **stuck** when it should be making progress and has not grown for the time set under **Admin > Upkeep** (6 hours by default). Time spent paused, queued or being checked does not count.
+PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does two things.
+
+**Finished downloads.** Every minute PiRick looks for downloads that have just finished. For each one it leaves a note for the person who asked, which they get the next time they open PiRick: `“Wrenfield Cross (S03E01)” has finished downloading.` Episodes of one show that finish before the note is read are gathered into one note. With Plex connected, PiRick also asks Plex to pick the download up straight away, and the note says so. This part is always on.
+
+**Stuck downloads.** Every 10 minutes PiRick also checks for downloads that have stopped, including ones added before this feature existed. A download is **stuck** when it should be making progress and has not grown for the time set under **Admin > Upkeep** (6 hours by default). Time spent paused, queued or being checked does not count.
 
 When a download is stuck, PiRick looks for another copy of the same thing:
 
@@ -166,13 +170,50 @@ The replacement goes into the same folder with the same category and tags. Only 
 
 This follows fixed rules; the AI model is not involved, because it runs unattended.
 
-**What people see.** A stuck download reads "Stuck: looking for another copy" in the Downloads panel. When the person who asked for it next opens PiRick, the chat shows what was done as plain status lines, followed by a short summary in PiRick's own voice (using the personality, if one is set). The status lines are written by PiRick and are the reliable record. **Admin > Upkeep** lists the last 50 actions and has a **Check now** button and an off switch.
+**What people see.** A stuck download reads "Stuck: looking for another copy" in the Downloads panel. When the person who asked for it next opens PiRick, the chat shows what was done as plain status lines, followed by a short summary in PiRick's own voice (using the personality, if one is set). The status lines are written by PiRick and are the reliable record. **Admin > Upkeep** lists the last 50 actions and has a **Check now** button and an off switch. The switch is for replacing stuck downloads; finished downloads are noticed either way.
 
 Things to know:
 
 - A dead pack replaced by single episodes may end up incomplete: only episodes that exist as single files can be fetched. The activity entry says "all that could be found" when this happens.
 - qBittorrent's own queue limits how many downloads are active at once (three by default). Dead downloads holding those slots keep the rest waiting until upkeep replaces them. Turning on "Do not count slow torrents in these limits" in qBittorrent's BitTorrent options, or lowering the hours here, clears a backlog faster.
 - Torrents in an error state in qBittorrent (missing files, disk problems) are flagged but not replaced, since another copy would not fix them.
+- A finish is noticed within about a minute, not at once. A download that was already finished the first time PiRick saw it (after an update, say) is old news and gets no note.
+
+## Connecting Plex
+
+PiRick works without talking to Plex. Connecting it is optional and fixes two things:
+
+- **"It's finished" becomes true sooner.** Plex notices new files on its own schedule, which can be hours. With Plex connected, PiRick asks it to look at a download's folder the moment the download finishes.
+- **Nothing is fetched twice.** Without Plex, PiRick only knows what is in qBittorrent. With it, PiRick checks what is already in your Plex libraries, however it got there, before fetching anything.
+
+**Setting it up.** Add two lines to `.env` and run `docker compose up -d`:
+
+```
+PLEX_URL=http://host.docker.internal:32400
+PLEX_TOKEN=your-token
+```
+
+`PLEX_URL` is the address of the Plex server as seen from the PiRick container, with nothing after the port (see "Reaching your other services"). `PLEX_TOKEN` is your Plex access token: in Plex's web app, open any film or episode, choose **Get Info** from its `⋯` menu, then **View XML**, and copy what follows `X-Plex-Token=` in the address of the page that opens. Plex describes this under [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/). **Admin > Connections** then shows the server's name and how many libraries it has.
+
+**Treat the token like a password.** It gives full control of your Plex server. PiRick only reads what is in the libraries and asks for scans; it never changes or removes anything in Plex. The token is sent in a request header, never in an address, and is never logged, shown in the Admin screen or given to the AI model.
+
+**Matching libraries.** qBittorrent and Plex usually see one folder under two paths, for example `/media/TV` and `/data/TV`. PiRick takes each of its libraries to be the Plex folder whose path ends the same way. **Admin > Libraries** shows the match under each library, with a list to pick another Plex folder or **Not in Plex**. A library with no match works as before; Plex is just not told about its downloads.
+
+**When a download finishes**, PiRick asks Plex to scan that one folder: the show's own folder, or the film's. It is one request however many episodes finished together. If Plex cannot be reached, PiRick tries again on its next few looks, then gives up and says only that the download finished. In the Downloads panel a download reads "Finished, ready in Plex" once Plex has been asked, and "Finished" otherwise.
+
+**What you already have.** The assistant is told what Plex has along with what it finds:
+
+- **Films.** A search result for a film Plex already has (same title, year within one) is marked as such. If the assistant tries to download it anyway, PiRick stops it and has it ask the person first.
+- **Shows.** Asked for a whole show, PiRick leaves out the seasons and episodes Plex has and fetches the rest. Asked for one season that Plex has some of, it says how many episodes are there and asks before fetching. An episode that is there is reported as there.
+- **"Do we have…?"** is answered from Plex and never starts a download by itself. If it is not there, PiRick says so and asks whether to get it.
+
+Things to know:
+
+- Plex knows which episodes it has, not how many a season should have. PiRick reports the number and leaves the judgement to you. For a whole show it takes every season before the last one you have to be complete, and looks for single episodes missing from that last one.
+- Films and shows are matched by title and year. Capitals, punctuation and numbers written as words do not matter, but something filed in Plex under a quite different name is not recognised and may be fetched again.
+- Music and books are not checked against Plex.
+- If Plex is down when someone asks for something, PiRick carries on as it does without Plex.
+- Use an `http://` address on your own network. If Plex is set to require secure connections (Settings > Network), that is refused: set it to "Preferred".
 
 ## Personality
 
@@ -246,9 +287,9 @@ npm run bench -- --models gemma4:12b --think off    # the same model with thinki
 npm run bench -- --report                           # rebuild the report from the saved runs
 ```
 
-Each run builds a throwaway PiRick in memory, with the real prompt, tools and reply check, and sends it one of 36 requests: films and shows asked for plainly, vaguely, misspelt or in Spanish; requests where it should ask first; downloads that fail; a search result that is an advert and one that carries instructions for the AI; a personality to keep up. Jackett and qBittorrent are stand-ins inside the benchmark, which is never told where the real ones are, so nothing is searched for or downloaded. A run is judged by what happened, such as which release reached the stand-in qBittorrent and in which folder, not by a second AI's opinion of the wording. A model that checks before downloading ("shall I get the 1080p one?") is told yes and judged on what it does next: checking first is counted, but only failing to follow through is a failure.
+Each run builds a throwaway PiRick in memory, with the real prompt, tools and reply check, and sends it one of 41 requests: films and shows asked for plainly, vaguely, misspelt or in Spanish; requests where it should ask first; things that are already in Plex, and questions about whether they are; downloads that fail; a search result that is an advert and one that carries instructions for the AI; a personality to keep up. Jackett, qBittorrent and Plex are stand-ins inside the benchmark, which is never told where the real ones are, so nothing is searched for or downloaded. A run is judged by what happened, such as which release reached the stand-in qBittorrent and in which folder, not by a second AI's opinion of the wording. A model that checks before downloading ("shall I get the 1080p one?") is told yes and judged on what it does next: checking first is counted, but only failing to follow through is a failure.
 
-Results go to `bench/results/main/`: `report.md` ranks the models and `transcripts/` holds every conversation. For each model the report gives how often it did the right thing, its critical failures (the wrong thing downloaded, a download without asking when it should have asked, a false "it's downloading"), how often PiRick had to correct it behind the scenes, how long a request took, how many searches it made, and how much memory it used.
+Results go to `bench/results/main/`: `report.md` ranks the models and `transcripts/` holds every conversation. For each model the report gives how often it did the right thing, its critical failures (the wrong thing downloaded, a download without asking when it should have asked or when it was only asked a question, a false "it's downloading"), how often PiRick had to correct it behind the scenes, how long a request took, how many searches it made, and how much memory it used.
 
 Things to know:
 
@@ -283,6 +324,8 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `QBIT_URL` | qBittorrent Web UI address | `http://host.docker.internal:8080` |
 | `QBIT_USERNAME`, `QBIT_PASSWORD` | qBittorrent Web UI login | none |
 | `MAX_TORRENT_SIZE_GB` | Refuse anything larger; `0` = no limit | `0` |
+| `PLEX_URL` | Plex server address, with nothing after the port. Optional: see "Connecting Plex" | none |
+| `PLEX_TOKEN` | Plex access token. Needed together with `PLEX_URL` | none |
 | `TRUST_PROXY` | Number of reverse proxies in front of PiRick, the proxy's address, or `false` | `false` (`1` in `.env.example`) |
 | `COOKIE_SECURE` | `auto`, `true` or `false` | `auto` |
 | `SESSION_IDLE_DAYS`, `SESSION_MAX_DAYS` | Sign out after this long unused / regardless | `7`, `30` |
@@ -297,7 +340,8 @@ What is in place:
 - Login attempts are limited: 5 per address and username, 20 per username, 30 per address, every 15 minutes.
 - Requests that change anything must come from PiRick's own pages (custom header plus the browser's same-origin signal), which blocks cross-site request forgery.
 - A strict Content Security Policy allows no inline or third-party scripts. Model replies and torrent titles are inserted as text, never as HTML.
-- The model never sees or supplies links, magnet addresses, folder paths or the Jackett key. It can only pick from results Jackett returned to that same person, by id, and only save into a library an admin defined. Show names it supplies are cleaned so they cannot point outside the library's folder.
+- The model never sees or supplies links, magnet addresses, folder paths, the Jackett key or the Plex token. It can only pick from results Jackett returned to that same person, by id, and only save into a library an admin defined. Show names it supplies are cleaned so they cannot point outside the library's folder.
+- The Plex token travels only in a request header to the address in `PLEX_URL`. It is never put in an address, a log line or an API reply. PiRick does not follow a redirect from Plex, which would carry the token elsewhere.
 - A download link from Jackett is followed only to a magnet or within the site it started on, never on to another address. A torrent file over 10 MB, or a magnet that is more than one line, is refused.
 - The container runs as a non-root user with a read-only filesystem, no Linux capabilities and no privilege escalation. Only `/data` is writable.
 
@@ -306,7 +350,7 @@ What it does not do:
 - No two-factor login and no self-service sign-up or password recovery. Admins reset passwords.
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
-- `.env` holds your Jackett key and qBittorrent password in plain text. Keep the file private; it is excluded from git and from the Docker image.
+- `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
 
 ## Managing people
 
@@ -337,7 +381,11 @@ The database (accounts, sessions, chat history, libraries, personality and upkee
 | A show came down as many single episodes | No pack with enough seeders was found. The grey "Found …" line in the chat says what PiRick chose. |
 | A download has sat at the same point for days | Check **Admin > Upkeep**: it shows whether the item is stuck and why it was not replaced (no other copy, already replaced three times, or its name could not be read). |
 | Many downloads are "queued" and never start | qBittorrent's queue limit, with dead downloads holding the active slots. See "Upkeep: stuck downloads". |
-| Downloads finish but are not in Plex | The library's folder is not inside a Plex library folder. See "Libraries". |
+| Downloads finish but are not in Plex | The library's folder is not inside a Plex library folder: see "Libraries". Or Plex has not scanned yet, which can take hours unless PiRick is connected to it: see "Connecting Plex". |
+| Plex: "rejected the token" | `PLEX_TOKEN` is wrong or has been withdrawn (signing out of all devices in Plex does that). Copy a new one. |
+| Plex: "Cannot reach Plex" with an address that is right | Plex is set to require secure connections, or `PLEX_URL` uses `https://` with an address the certificate is not for. Use `http://` and set Plex's secure connections to "Preferred". |
+| A download reads "Finished", not "ready in Plex" | Its library has no matching Plex folder (check **Admin > Libraries**), Plex could not be reached at the time, or it finished before Plex was connected. |
+| PiRick fetched something that is already in Plex | It is filed in Plex under a different title or year, or in a library of another kind. See "Connecting Plex". |
 | "Not downloaded: the … library's folder does not exist" | The folder in Admin > Libraries is wrong, often only in its capitals. Open that screen and use the suggested fix. |
 | A download went into the wrong library | Make the "What goes here" descriptions more specific, especially where two libraries overlap. |
 | qBittorrent: "refusing PiRick before it looks at the password" | qBittorrent rejects requests whose port differs from its own, which happens when its port is remapped in Docker (for example `9090:8080`). Use the same port on both sides, or turn off "Enable Host header validation" in its Web UI options. |
@@ -361,7 +409,7 @@ Needs Node.js 22.13 or newer. Express is the only dependency.
 
 ```
 npm install
-npm test          # unit tests plus a full run against stand-in Ollama, Jackett and qBittorrent servers
+npm test          # unit tests plus full runs against stand-in Ollama, Jackett, qBittorrent and Plex servers
 npm run dev       # runs from .env with auto-reload; data goes to ./data
 npm run bench     # compares Ollama models on PiRick's own job: see "Choosing a model"
 ```
@@ -377,12 +425,12 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/tools.js` | The tools the model can call: search, find a show, download (a result or a whole plan, into a library), list downloads |
 | `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
-| `src/upkeep.js` | The periodic check for stuck downloads and their replacement |
-| `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js` | Clients for the three services |
+| `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, and replacing the ones that are stuck |
+| `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
 | `src/settings.js`, `src/folders.js` | Libraries and personality; folder naming, matching and checks |
 | `src/conversation.js`, `src/db.js` | Chat history and the SQLite schema |
 | `web/` | Login page, chat page, styles and browser scripts (no build step) |
-| `bench/` | The model benchmark: scenarios, a stand-in indexer, the runner and its report. Not part of the Docker image |
+| `bench/` | The model benchmark: scenarios, a stand-in indexer and Plex server, the runner and its report. Not part of the Docker image |
 | `docs/` | The screenshots and diagram in this README. Not part of the Docker image |
 | `test/` | Tests |
 

@@ -23,6 +23,11 @@ const { createWorld, scripted } = await import('./world.js');
 const THINK = { default: undefined, off: false, on: true, low: 'low', medium: 'medium', high: 'high' };
 const SCRIPTED = 'scripted';
 const MAX_ATTEMPTS = 3;
+// Raised whenever the words of PiRick's push change (the message that sends a
+// model back to finish the job). A saved run in which a push was sent shows how
+// the model took the old words, so it is played again; every other saved run
+// would come out the same and is kept.
+const PUSH_WORDING = 2;
 const GB = 1024 ** 3;
 // How long memory is given to be released after a model is unloaded.
 const SETTLE_MS = 3000;
@@ -164,6 +169,7 @@ async function runOnce(model, scenario, pass) {
       ok,
       critical,
       disturbed,
+      pushWording: PUSH_WORDING,
       expectsPush: Boolean(scenario.expectsPush),
       checks,
       flags: trace.flags,
@@ -179,7 +185,9 @@ async function runOnce(model, scenario, pass) {
 
 const key = (record) => `${configOf(record)}|${record.scenario}|${record.pass}`;
 // A run saved before the user began answering PiRick's questions is kept unless it stopped at one.
-const stale = (record) => stoppedAtQuestion(SCENARIOS.find((scenario) => scenario.id === record.scenario) ?? { turns: [] }, record);
+const stale = (record) =>
+  stoppedAtQuestion(SCENARIOS.find((scenario) => scenario.id === record.scenario) ?? { turns: [] }, record) ||
+  ((record.pushWording ?? 1) < PUSH_WORDING && record.turns.some((turn) => turn.nudges > 0));
 const done = new Set(records.filter((record) => record.type === 'run' && !record.disturbed && !stale(record)).map(key));
 
 for (const model of models) {

@@ -310,9 +310,14 @@ async function searchAll(search, queries, atOnce) {
  * together. Resolves to `{ plan }`, `{ others }` or `{ years }` (see matchShow).
  *
  * Searches are slow, so each one is only made if what is known so far is not
- * already good enough.
+ * already good enough. A caller that already has part of the show can save
+ * more of them: `settled` lists seasons that need no looking for, and
+ * `inParts` says a pack of the whole show is no use.
  */
-export async function planShow(search, { title, season = null, episode = null, quality = 1080, maxBytes = 0, skip = () => false, atOnce = 1 }) {
+export async function planShow(
+  search,
+  { title, season = null, episode = null, quality = 1080, maxBytes = 0, skip = () => false, settled = new Set(), inParts = false, atOnce = 1 },
+) {
   const wanted = parseWanted(title);
   const options = { season, episode, quality, maxBytes };
   let found = [];
@@ -347,13 +352,13 @@ export async function planShow(search, { title, season = null, episode = null, q
     if (!unclear && !goodPack('season')) unclear = await look([`${wanted.name} season ${season}`]);
   } else {
     unclear = await look([wanted.name]);
-    if (!unclear && !goodPack('series')) unclear = await look([`${wanted.name} complete`]);
+    if (!unclear && !inParts && !goodPack('series')) unclear = await look([`${wanted.name} complete`]);
     if (!unclear && !goodPack('series')) {
       // No good complete pack: look at each season that still lacks a good pack of its own.
       const seen = releases.flatMap(({ parsed }) => (parsed.seasons.length ? parsed.seasons : [parsed.season ?? 1]));
       const lastSeason = Math.min(Math.max(0, ...seen), MAX_SEASONS);
       const covered = new Set(plan.parts.filter((part) => part.type !== 'episodes' && part.releases.every(healthy)).flatMap((part) => part.seasons));
-      const seasons = range(1, lastSeason).filter((number) => !covered.has(number));
+      const seasons = range(1, lastSeason).filter((number) => !covered.has(number) && !settled.has(number));
       if (seasons.length) unclear = await look(seasons.map((number) => `${wanted.name} S${pad(number)}`));
     }
   }

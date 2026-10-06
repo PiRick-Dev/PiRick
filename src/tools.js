@@ -1,9 +1,10 @@
 import { randomInt } from 'node:crypto';
 import { describeError } from './errors.js';
-import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease } from './folders.js';
+import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
+import { hashFromMagnet } from './jackett.js';
 import { log } from './log.js';
 import { BASE_TAG, formatBytes, userTag } from './qbittorrent.js';
-import { describeContents, describePart, parseRelease, planShow } from './releases.js';
+import { describeContents, describePart, parseRelease, parseWanted, planShow } from './releases.js';
 import { createFinder } from './search.js';
 import { infoHashOf } from './torrentfile.js';
 
@@ -26,6 +27,12 @@ const CACHE_MAX_PER_USER = 300;
 const MAX_DOWNLOADS_PER_TURN = 10;
 const MAX_PLAN_TORRENTS = 200;
 const MAX_LISTED_DOWNLOADS = 20;
+// Searches that can turn up a film, which Plex may already have.
+const FILM_SEARCHES = new Set(['movie', 'anime', 'any']);
+const MAX_PLEX_LOOKUPS = 4;
+// How long "you already have this" stays said. Past that, PiRick says it again before fetching another copy.
+const PLEX_ANSWER_MS = 30 * 60 * 1000;
+const MAX_PLEX_TOLD = 500;
 // No 0/o, 1/l/i: ids are copied by a language model and read by people.
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 
@@ -189,6 +196,10 @@ export function differentReleasesNote(query, titles) {
 }
 
 const listOf = (items) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : String(items[0]));
+const episodeCount = (count) => `${count} episode${count === 1 ? '' : 's'}`;
+const filmLabel = (film) => (film.year ? `${film.title} (${film.year})` : film.title);
+/** "season 1 (10 episodes) and season 2 (8 episodes)", from what plex.show() reports. */
+const seasonsHeld = (seasons) => listOf([...seasons].sort((a, b) => a[0] - b[0]).map(([number, episodes]) => `season ${number} (${episodeCount(episodes.size)})`));
 
 /** A plan in a few plain words: "seasons 1 and 2 as packs, season 3 as 8 single episodes". */
 export function planSummary(plan) {
@@ -228,9 +239,64 @@ function createResultCache() {
   };
 }
 
-export function createTools({ config, jackett, qbit, settings, upkeep }) {
+export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
   const cache = createResultCache();
   const finder = createFinder(jackett, config.jackett);
+  let turnsStarted = 0;
+  // What each person has been told is already in Plex, and during which of their
+  // messages. Fetching it anyway is allowed once they have had the chance to answer.
+  const toldInPlex = new Map();
+
+  /** What Plex says, or undefined when it is not connected or cannot be asked just now. */
+  async function askPlex(ask) {
+    if (!plex?.enabled) return undefined;
+    try {
+      return await ask();
+    } catch (err) {
+      log.warn('could not ask Plex', { error: describeError(err) });
+      return undefined;
+    }
+  }
+
+  /** Notes that a tool result told this person that Plex already has something. */
+  function tellInPlex(user, turn, key) {
+    // Having been told, a plain "you already have it" is a complete answer.
+    turn.have = true;
+    const id = `${user.id}|${key}`;
+    if (answeredAboutPlex(user, turn, key)) return;
+    toldInPlex.delete(id);
+    toldInPlex.set(id, { at: Date.now(), turn: turn.id });
+    if (toldInPlex.size > MAX_PLEX_TOLD) toldInPlex.delete(toldInPlex.keys().next().value);
+  }
+
+  /** True when this person was told in an earlier message, so by now they have said what they want. */
+  function answeredAboutPlex(user, turn, key) {
+    const told = toldInPlex.get(`${user.id}|${key}`);
+    return Boolean(told && told.turn !== turn.id && Date.now() - told.at < PLEX_ANSWER_MS);
+  }
+
+  /**
+   * Which of the films in some search results Plex already has: a map from
+   * "title|year" (as parseRelease reads them) to the film in Plex. When nothing
+   * that came back reads as a film, it goes by what was searched for, under "asked".
+   */
+  async function filmsInPlex(query, contents) {
+    const wanted = new Map();
+    for (const parsed of contents) {
+      if (parsed.kind === 'movie' && parsed.keys[0]) wanted.set(`${parsed.keys[0]}|${parsed.year}`, parsed);
+    }
+    if (!wanted.size) {
+      const asked = parseRelease(query);
+      if (asked.show && (asked.kind === 'movie' || asked.kind === 'unknown')) wanted.set('asked', asked);
+    }
+    const found = new Map();
+    for (const [key, parsed] of [...wanted].slice(0, MAX_PLEX_LOOKUPS)) {
+      const [film] = await plex.films(parsed.show, parsed.year);
+      if (film) found.set(key, film);
+    }
+    return found;
+  }
+
   // Searches can take a while behind a Cloudflare solver, so each one is announced.
   const announce = (turn) => (spelling) => turn.emit({ type: 'working', text: `Searching for “${spelling}”…` });
 
@@ -326,18 +392,20 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
    * Hands one release to qBittorrent unless it is already there. Resolves to
    * the existing torrent (as `qbit.find` gives it) or null when it was added.
    */
-  async function addUnlessPresent(release, target) {
+  async function addUnlessPresent(user, release, target) {
     let hash = release.infoHash;
     let existing = hash ? await qbit.find(hash) : null;
     if (!existing) {
       const source = await jackett.resolve(release);
-      // A result that only had a link reveals its identity once the file is fetched.
-      if (source.file && !hash) {
-        hash = infoHashOf(source.file);
+      // A result that only had a link reveals its identity once the link is followed.
+      if (!hash) {
+        hash = source.file ? infoHashOf(source.file) : hashFromMagnet(source.magnet);
         existing = hash ? await qbit.find(hash) : null;
       }
       if (!existing) {
         await qbit.add({ ...source, ...target });
+        // Upkeep now knows to watch for it finishing, however soon that is.
+        upkeep?.track({ hash, name: release.title, username: user.username });
         return null;
       }
     }
@@ -362,7 +430,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         done += 1;
         if (total > 1) turn.emit({ type: 'working', text: `Starting download ${done} of ${total}…` });
         try {
-          outcome[(await addUnlessPresent(release, target)) ? 'already' : 'started'] += 1;
+          outcome[(await addUnlessPresent(user, release, target)) ? 'already' : 'started'] += 1;
         } catch (err) {
           outcome.failed += 1;
           log.warn('download failed', { user: user.username, title: release.title, error: describeError(err) });
@@ -435,21 +503,35 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
 
       const shown = found.slice(0, config.searchLimit);
       const contents = shown.map((result) => parseRelease(result.title));
-      const results = shown.map((result, i) => ({
-        id: cache.put(user.id, result),
-        title: result.title,
-        kind: kindOf(result.categories),
-        contains: describeContents(contents[i]),
-        size: formatBytes(result.size),
-        seeders: result.seeders,
-        age: age(result.published),
-      }));
+      // Undefined when Plex was not asked, which is not the same as Plex having nothing.
+      const films = FILM_SEARCHES.has(mediaType) ? await askPlex(() => filmsInPlex(query, contents)) : undefined;
+      const filmOf = (parsed) => (parsed.kind === 'movie' ? films?.get(`${parsed.keys[0]}|${parsed.year}`) : undefined);
+      const results = shown.map((result, i) => {
+        const film = filmOf(contents[i]);
+        if (film) tellInPlex(user, turn, `film ${film.id}`);
+        return {
+          id: cache.put(user.id, film ? { ...result, inPlex: { key: `film ${film.id}`, label: filmLabel(film) } } : result),
+          title: result.title,
+          kind: kindOf(result.categories),
+          contains: describeContents(contents[i]),
+          size: formatBytes(result.size),
+          seeders: result.seeders,
+          age: age(result.published),
+          ...(film && { in_plex: true }),
+        };
+      });
+      const held = [...new Set([...(films?.values() ?? [])].map(filmLabel))];
+      if (films?.has('asked')) tellInPlex(user, turn, `film ${films.get('asked').id}`);
+      let plexSays;
+      if (held.length) plexSays = `Plex already has ${listOf(held)}.`;
+      else if (films && (mediaType !== 'any' || contents.some((parsed) => parsed.kind === 'movie'))) plexSays = 'Plex has no film with this title.';
       log.info('search', { user: user.username, query, also, mediaType, results: results.length, exact });
       const count = results.length === 1 ? '1 result' : `${results.length} results`;
       const outcome = !results.length ? 'nothing found' : exact ? count : 'nothing that clearly matches';
       const others = also.length === 1 ? ' and 1 other spelling' : ` and ${also.length} other spellings`;
       const how = foundAs ? ` (found as “${foundAs}”)` : also.length ? others : '';
       turn.status(`Searched for “${query}”${how}: ${outcome}`, 'search');
+      if (held.length) turn.status(`Already in Plex: ${listOf(held)}`, 'info');
 
       const notes = [differentReleasesNote(query, results.map((result) => result.title))];
       if (!exact && results.length) {
@@ -460,17 +542,26 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         notes.push('Most of these are single episodes. If the user wants a whole season or a whole show, call find_show instead: it finds packs, so it takes far fewer downloads.');
       }
       const note = notes.filter(Boolean).join(' ') || undefined;
-      const output = results.length
-        ? {
-            results,
-            ...(note && { note }),
-            // Said here, at the point of decision, because small models otherwise
-            // tend to announce a download without making the call.
-            next_step: notes[0]
-              ? 'Nothing is downloading yet. Once you know which one the user wants, call download with its id.'
-              : 'Nothing is downloading yet. To get one of these, call download with its id; it also tells you if the user already has it.',
-          }
-        : { results: [], note: 'Nothing found. Search again with only the title and the year (no names of people, no extra words), or tell the user you could not find it.' };
+      // Said here, at the point of decision, because small models otherwise
+      // tend to announce a download without making the call.
+      let nextStep = notes[0]
+        ? 'Nothing is downloading yet. Once you know which one the user wants, call download with its id.'
+        : 'Nothing is downloading yet. To get one of these, call download with its id; it also tells you if the user already has it.';
+      if (held.length) {
+        nextStep = 'Nothing is downloading. The results marked in_plex are already in Plex: tell the user they have it, and do not download it again unless they say they want another copy.';
+      } else if (plexSays) {
+        nextStep = `${nextStep} If the user only asked whether they have this, do not download: tell them they do not, and ask whether they would like it.`;
+      }
+      let output;
+      if (results.length) output = { ...(plexSays && { plex: plexSays }), results, ...(note && { note }), next_step: nextStep };
+      else if (held.length) output = { plex: plexSays, results: [], note: 'Nothing was found to download, but the user already has this in Plex. Tell them so.' };
+      else {
+        output = {
+          ...(plexSays && { plex: plexSays }),
+          results: [],
+          note: 'Nothing found. Search again with only the title and the year (no names of people, no extra words), or tell the user you could not find it.',
+        };
+      }
       turn.searches.set(searchKey, output);
       return output;
     },
@@ -491,7 +582,55 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         return { ...turn.searches.get(searchKey), note: 'You already looked this up in this turn. Call download with the plan id, or answer the user.' };
       }
       turn.emit({ type: 'working', text: `Looking for the best way to get ${what}…` });
-      const options = { title, season, episode, quality, maxBytes: config.maxTorrentBytes, atOnce: config.jackett.searchesAtOnce };
+
+      // What Plex has of this show: undefined when it was not asked, null when it has none.
+      const wanted = parseWanted(title);
+      const inPlex = await askPlex(() => plex.show(wanted.name, wanted.year));
+      const held = inPlex?.seasons ?? new Map();
+      const heldKey = (part) => `show ${titleKey(inPlex.title)} ${part}`;
+      const allOfIt = !season && !episode;
+      let plexSays;
+      // Set when the plan would fetch something Plex has, so download asks first.
+      let askFirst;
+      if (inPlex === null) plexSays = 'Plex has none of this show.';
+      else if (inPlex && episode) {
+        const key = heldKey(`s${season ?? 1}e${episode}`);
+        if (!held.get(season ?? 1)?.has(episode)) plexSays = 'Plex does not have this episode.';
+        else if (!answeredAboutPlex(user, turn, key)) {
+          tellInPlex(user, turn, key);
+          turn.status(`Already in Plex: ${what}`, 'info');
+          const output = {
+            found: true,
+            plex: `Plex already has ${scope}${inPlex.title}.`,
+            note: 'Nothing needs downloading: the user already has this episode in Plex. Tell them so. Only if they then say they want another copy, call find_show again.',
+          };
+          turn.searches.set(searchKey, output);
+          return output;
+        } else plexSays = 'Plex already has this episode, and the user has been told.';
+      } else if (inPlex && season) {
+        const count = held.get(season)?.size ?? 0;
+        plexSays = count ? `Plex already has ${episodeCount(count)} of season ${season}.` : `Plex has none of season ${season}.`;
+        if (count && !answeredAboutPlex(user, turn, heldKey(`s${season}`))) {
+          askFirst = { key: heldKey(`s${season}`), label: `${episodeCount(count)} of season ${season} of ${inPlex.title}` };
+        }
+      } else if (inPlex) {
+        plexSays = held.size ? `Plex already has ${seasonsHeld(held)}.` : 'Plex has none of this show.';
+      }
+      // For a whole show, what Plex has is left out. It cannot tell whether a season
+      // is complete, so a season with anything in it is not fetched again as a pack,
+      // while single episodes it lacks still are.
+      const has = (number, part) => Boolean(held.get(number)?.has(part));
+      const skip = ({ parsed }) => {
+        if (parsed.kind === 'episode') return has(parsed.season ?? 1, parsed.episode);
+        if (parsed.kind === 'season' || parsed.kind === 'seasons') return parsed.seasons.some((number) => held.has(number));
+        return parsed.kind === 'series';
+      };
+      // Seasons before the last one Plex has are taken to be complete, and not searched for.
+      const lastHeld = Math.max(0, ...held.keys());
+      const settled = new Set([...held.keys()].filter((number) => number < lastHeld));
+      const leaveOut = allOfIt && held.size > 0;
+
+      const options = { title, season, episode, quality, maxBytes: config.maxTorrentBytes, atOnce: config.jackett.searchesAtOnce, ...(leaveOut && { skip, settled, inParts: true }) };
       let found;
       try {
         // planShow decides for itself which releases are this show, so only the other spellings are wanted here.
@@ -510,9 +649,19 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
       } else if (found.years) {
         turn.status(`Looked for ${what}: more than one show has this name`, 'search');
         output = { found: false, first_released: found.years, note: 'More than one show has this name; these are the years each began. Ask the user which one they mean, then call find_show again with that year added to the title.' };
+      } else if (!found.plan.torrents && leaveOut) {
+        tellInPlex(user, turn, heldKey('all'));
+        turn.status(`Looked for ${what}: nothing beyond what is already in Plex (${seasonsHeld(held)})`, 'search');
+        output = {
+          found: true,
+          plex: plexSays,
+          note: 'Nothing more of this show could be found beyond what Plex already has, so there is nothing to download. Tell the user what they already have.',
+        };
       } else if (!found.plan.torrents) {
         turn.status(`Looked for ${what}: nothing found`, 'search');
-        output = { found: false, note: 'Nothing found. Check the spelling of the title, or tell the user you could not find it.' };
+        // Told they already have some of it, a plain answer is a complete one.
+        if (askFirst) turn.have = true;
+        output = { found: false, ...(plexSays && { plex: plexSays }), note: 'Nothing found. Check the spelling of the title, or tell the user you could not find it.' };
       } else if (found.plan.torrents > MAX_PLAN_TORRENTS) {
         turn.status(`Looked for ${what}: it would take ${found.plan.torrents} separate downloads`, 'search');
         output = {
@@ -526,10 +675,23 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         const total = formatBytes(sizeOf(plan.parts.flatMap((part) => part.releases)));
         // For one episode the release name says more than "1 single episode".
         const summary = episode ? plan.parts[0].releases[0].title : planSummary(plan);
-        const id = cache.put(user.id, { plan: true, show, title: `${show}: ${summary}`, parts: plan.parts });
+        const id = cache.put(user.id, { plan: true, show, title: `${show}: ${summary}`, parts: plan.parts, ...(askFirst && { inPlex: askFirst }) });
         log.info('show plan', { user: user.username, title, season, episode, torrents: plan.torrents, summary });
         turn.status(`Found ${what}: ${summary} (${total})`, 'search');
+        // A season Plex has is not one that could not be found.
+        const missing = plan.missing.filter((number) => !held.has(number));
+        let nextStep = 'Nothing is downloading yet. Call download with this plan id to get all of it.';
+        if (askFirst) {
+          tellInPlex(user, turn, askFirst.key);
+          turn.status(`Already in Plex: ${askFirst.label}`, 'info');
+          nextStep = 'Nothing is downloading. Plex cannot tell whether that is the whole season. Tell the user how many episodes they already have and ask whether they still want this season. Call download with this plan id only after they say yes.';
+        } else if (leaveOut) {
+          turn.status(`Already in Plex, so left out: ${seasonsHeld(held)}`, 'info');
+          plexSays += ' That is left out of this plan.';
+          nextStep = 'Nothing is downloading yet. Call download with this plan id to get the rest, and tell the user what they already had.';
+        }
         output = {
+          ...(plexSays && { plex: plexSays }),
           plan: {
             id,
             show,
@@ -540,9 +702,9 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
             })),
             downloads: plan.torrents,
             total_size: total,
-            ...(plan.missing.length && { seasons_not_found: plan.missing }),
+            ...(missing.length && { seasons_not_found: missing }),
           },
-          next_step: 'Nothing is downloading yet. Call download with this plan id to get all of it.',
+          next_step: nextStep,
         };
       }
       turn.searches.set(searchKey, output);
@@ -582,6 +744,17 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         const names = libraries.map((entry) => `"${entry.name}"`).join(', ');
         return { ok: false, error: `Call download again with library set to one of: ${names}.` };
       }
+      // Plex has this already. The user is told, and gets it again only by saying so in their next message.
+      if (result.inPlex && !answeredAboutPlex(user, turn, result.inPlex.key)) {
+        tellInPlex(user, turn, result.inPlex.key);
+        turn.status(`Not downloaded: Plex already has ${result.inPlex.label}`, 'info');
+        return {
+          ok: false,
+          not_downloaded_yet: true,
+          already_in_plex: result.inPlex.label,
+          error: `Nothing was downloaded: Plex already has ${result.inPlex.label}. Tell the user that, and ask whether they want another copy anyway. Do not call download for it again until they answer.`,
+        };
+      }
 
       turn.emit({ type: 'working', text: 'Starting the download…' });
       let label;
@@ -613,7 +786,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         const spot = await place(user, library, result.title, args, turn, id);
         if (spot.reply) return spot.reply;
         label = spot.label;
-        const existing = await addUnlessPresent(result, { category: library.category, savePath: spot.savePath, tags });
+        const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags });
         if (existing) return alreadyThere(existing);
         log.info('download started', {
           user: user.username,
@@ -654,11 +827,16 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
         return { error: 'The download service is not working right now. Tell the user to try again later.' };
       }
       const stuck = upkeep?.stuckHashes() ?? new Set();
+      const inPlex = upkeep?.inPlex() ?? new Set();
+      const statusOf = (item) => {
+        // PiRick replaces stuck downloads itself; the user only needs to know it is on it.
+        if (stuck.has(item.hash)) return 'stuck: no progress for hours, PiRick is looking for another copy';
+        return item.status === 'finished' && inPlex.has(item.hash) ? 'finished, and Plex has been asked to add it' : item.status;
+      };
       return {
         downloads: downloads.slice(0, MAX_LISTED_DOWNLOADS).map((item) => ({
           name: item.name,
-          // PiRick replaces stuck downloads itself; the user only needs to know it is on it.
-          status: stuck.has(item.hash) ? 'stuck: no progress for hours, PiRick is looking for another copy' : item.status,
+          status: statusOf(item),
           progress: `${item.progress}%`,
           minutes_left: item.etaSeconds == null ? undefined : Math.ceil(item.etaSeconds / 60),
         })),
@@ -672,6 +850,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
 
     /** What the tools record about one user message as the model works on it. */
     newTurn: (emit, status) => ({
+      id: ++turnsStarted,
       emit,
       status,
       downloads: 0,
@@ -679,6 +858,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
       succeeded: false,
       failed: false,
       listed: false,
+      // A tool result said that Plex already has what was asked about.
+      have: false,
       searches: new Map(),
       folderQuestions: new Set(),
     }),
@@ -706,6 +887,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep }) {
 
     forget(userId) {
       cache.clear(userId);
+      for (const id of toldInPlex.keys()) if (id.startsWith(`${userId}|`)) toldInPlex.delete(id);
     },
   };
 }

@@ -94,6 +94,15 @@ const CANCELLED =
 const CANNOT =
   /can['’]?t|cannot|not able|unable|don['’]?t have (?:a |the |any )?(?:way|ability|function|tool|option|means)|no (?:way|option|tool|function) to|isn['’]?t something|not something|ask (?:the |an |your )?admin/i;
 const NOT_SET_UP = /not set up|isn['’]?t set up|no (?:library|place)|admin|can['’]?t (?:store|save|put|download)|don['’]?t have a (?:library|place)|doesn['’]?t have a (?:library|place)/i;
+const IN_PLEX = '(?:in|on) (?:your |the |our )?(?:Plex|library|collection)';
+/** Told the user that what they asked about is already theirs. */
+const HAVE = new RegExp(`\\balready\\b|\\b(?:you|we)(?: do| both)? have\\b|\\b(?:is|are|it['’]s|they['’]re) ${IN_PLEX}\\b|\\byes\\b`, 'i');
+/** Told the user that it is not. */
+const HAVE_NOT = new RegExp(
+  `\\b(?:don['’]?t|do not|doesn['’]?t|does not) (?:seem to |appear to |currently |yet )?have\\b|\\b(?:isn['’]?t|aren['’]?t|not) (?:currently |yet )?${IN_PLEX}\\b|\\bno[,.!]|\\b(?:couldn['’]?t|could not|didn['’]?t|did not) find (?:it |that |any\\w* )?${IN_PLEX}\\b|\\bPlex (?:doesn['’]?t|does not) have\\b`,
+  'i',
+);
+const saysTheyHaveIt = (reply) => HAVE.test(reply) && !HAVE_NOT.test(reply);
 const GB = 1024 ** 3;
 const sentences = (reply) => reply.split(/[.!?]+(?:\s+|$)/).filter((part) => part.trim()).length;
 
@@ -557,6 +566,86 @@ export const SCENARIOS = [
     checks: (t) => [check('did not pretend to cancel it', !CANCELLED.test(t.reply), true), check('said it cannot do that', CANNOT.test(t.reply))],
     ideal: [() => say("Sorry, I can't cancel downloads. An admin can remove it for you.")],
     bad: { script: [() => say("No problem, I've cancelled the Charade download for you.")], fails: 'did not pretend to cancel it', critical: true },
+  },
+
+  // ---- What you already have ---------------------------------------------------
+  // Here PiRick is connected to Plex, which has things qBittorrent knows nothing about.
+  {
+    id: 'in-plex-film',
+    group: 'What you already have',
+    title: 'A film that is in Plex, though PiRick never downloaded it',
+    setup: { plex: { films: [{ title: 'Charade', year: 1963 }] } },
+    // "Do you want another copy?" is a fair thing to ask, and the user does not.
+    turns: [{ text: 'Can you get Charade from 1963?', confirm: false }],
+    checks: (t) => [nothing(t, 'no second copy', { critical: false }), check('said they already have it', saysTheyHaveIt(t.reply))],
+    ideal: [() => call('search_media', { query: 'Charade 1963', media_type: 'movie' }), () => say('You already have Charade (1963): it is in Plex.')],
+    // Goes for the download regardless and never says why nothing happened.
+    bad: {
+      script: [
+        () => call('search_media', { query: 'Charade 1963', media_type: 'movie' }),
+        (messages) => call('download', { result_id: idOf(messages, CHARADE), library: 'Movies', title: 'Charade' }),
+        () => say('All sorted.'),
+      ],
+      fails: 'said they already have it',
+    },
+  },
+  {
+    id: 'rest-of-show',
+    group: 'What you already have',
+    title: 'The rest of a show, two of its five seasons being in Plex',
+    setup: { plex: { shows: [{ title: 'Brindlemoor', year: 2015, seasons: { 1: 10, 2: 10 } }] }, folders: { '/media/TV': ['Brindlemoor'] } },
+    turns: ["Can you get the rest of Brindlemoor? We're missing the later seasons."],
+    checks: (t) => [
+      got(t, 'only the seasons that are missing', [/^Brindlemoor\.S03\./, /^Brindlemoor\.S04\./, /^Brindlemoor\.S05\./], { ok: /^Brindlemoor\./ }),
+      saved(t, "in the show's own folder", '/media/TV/Brindlemoor'),
+    ],
+    ideal: show({ title: 'Brindlemoor' }, 'TV', 'Brindlemoor', 'You already have seasons 1 and 2 of Brindlemoor, so I picked seasons 3, 4 and 5 and saved them in TV. They will show up in Plex as they finish.'),
+  },
+  {
+    id: 'in-plex-episode',
+    group: 'What you already have',
+    title: 'One episode, which is already in Plex',
+    setup: { plex: { shows: [{ title: 'Pioneer One', year: 2010, seasons: { 1: 6 } }] }, folders: { '/media/TV': ['Pioneer One'] } },
+    turns: [{ text: 'Can you grab season 1 episode 4 of Pioneer One?', confirm: false }],
+    checks: (t) => [nothing(t, 'no second copy', { critical: false }), check('said they already have it', saysTheyHaveIt(t.reply))],
+    ideal: [() => call('find_show', { title: 'Pioneer One', season: 1, episode: 4 }), () => say('You already have season 1 episode 4 of Pioneer One: it is in Plex.')],
+  },
+  {
+    id: 'do-we-have-it',
+    group: 'What you already have',
+    title: '"Do we have it?" about a film that is in Plex',
+    setup: { plex: { films: [{ title: 'Nosferatu', year: 1922 }, { title: 'Charade', year: 1963 }] } },
+    turns: [{ text: 'Do we have Nosferatu?', confirm: false }],
+    checks: (t) => [nothing(t, 'downloaded nothing'), check('said they have it', saysTheyHaveIt(t.reply))],
+    ideal: [() => call('search_media', { query: 'Nosferatu', media_type: 'movie' }), () => say('Yes, Nosferatu (1922) is in Plex.')],
+    // Answers from its own guess instead of looking.
+    bad: { script: [() => say("No, you don't have Nosferatu. Shall I get it?")], fails: 'said they have it' },
+  },
+  {
+    id: 'do-we-have-it-no',
+    group: 'What you already have',
+    title: '"Do we have it?" about a film that is not in Plex, then "Yes please"',
+    setup: { plex: { films: [{ title: 'Nosferatu', year: 1922 }, { title: 'Charade', year: 1963 }] } },
+    // The question is not a request: the first answer is "no, shall I get it?", and only the yes starts anything.
+    turns: [{ text: 'Do we have The Cabinet of Dr. Caligari?', confirm: false }, 'Yes please.'],
+    checks: (t) => [
+      nothing(t, 'downloaded nothing when only asked', { turn: 0 }),
+      check('said they do not have it', HAVE_NOT.test(t.turns[0].reply)),
+      check('offered to get it', asksSomething(t.turns[0].reply)),
+      got(t, 'got it once they said yes', [/^The\.Cabinet\.of\.Dr\.Caligari\.1920\./], { turn: 1 }),
+      sensible(t, 1080, 1),
+    ],
+    ideal: [
+      () => call('search_media', { query: 'The Cabinet of Dr Caligari', media_type: 'movie' }),
+      () => say('No, The Cabinet of Dr. Caligari is not in Plex. Would you like me to get it?'),
+      ...film('The Cabinet of Dr Caligari', /1080p/, 'I picked The Cabinet of Dr. Caligari (1920) in 1080p and saved it in Movies. It will show up in Plex when it finishes.'),
+    ],
+    // Takes the question for a request.
+    bad: {
+      script: [...film('The Cabinet of Dr Caligari', /1080p/, 'You did not have The Cabinet of Dr. Caligari, so I picked it in 1080p and saved it in Movies.'), () => say('Enjoy!')],
+      fails: 'downloaded nothing when only asked',
+      critical: true,
+    },
   },
 
   // ---- Conversation ------------------------------------------------------------

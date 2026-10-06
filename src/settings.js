@@ -45,6 +45,21 @@ export function parseUpkeep(input) {
   return { upkeep: { enabled: input.enabled, stuckHours } };
 }
 
+/**
+ * Checks which Plex folder an admin picked for a library. Returns `{ choice }`
+ * (null to have it worked out, `{ none: true }` for a library Plex does not
+ * have, or `{ key, path }`), or `{ error }`.
+ */
+export function parsePlexChoice(input) {
+  if (input?.choice === 'auto') return { choice: null };
+  if (input?.choice === 'none') return { choice: { none: true } };
+  const { key, path } = input?.choice ?? {};
+  if (typeof key !== 'string' || !/^\w{1,20}$/.test(key) || typeof path !== 'string' || !path || path.length > PATH_MAX || CONTROL_CHARACTERS.test(path)) {
+    return { error: 'Choose one of the Plex folders in the list.' };
+  }
+  return { choice: { key, path } };
+}
+
 /** Admin-editable settings kept in the database: libraries, personality and upkeep. */
 export function createSettings(db) {
   const columns = 'id, name, description, save_path, per_title, category';
@@ -69,6 +84,13 @@ export function createSettings(db) {
       category: row.category,
     };
   const values = (library) => [library.name, library.description, library.savePath, library.perTitle ? 1 : 0, library.category];
+  const plexChoices = () => JSON.parse(q.get.get('plex-libraries')?.value ?? '{}');
+  function setPlexChoice(libraryId, choice) {
+    const choices = plexChoices();
+    if (choice) choices[libraryId] = choice;
+    else delete choices[libraryId];
+    q.set.run('plex-libraries', JSON.stringify(choices));
+  }
 
   return {
     libraries: () => q.list.all().map(toLibrary),
@@ -91,7 +113,15 @@ export function createSettings(db) {
       return toLibrary(q.byId.get(id));
     },
 
-    removeLibrary: (id) => q.remove.run(id).changes > 0,
+    removeLibrary(id) {
+      // Ids are handed out again, so a choice left behind would attach itself to a later library.
+      setPlexChoice(id, null);
+      return q.remove.run(id).changes > 0;
+    },
+
+    /** The Plex folder an admin picked for a library (see parsePlexChoice), or null when it is worked out. */
+    plexChoice: (libraryId) => plexChoices()[libraryId] ?? null,
+    setPlexChoice,
 
     upkeep() {
       const stored = q.get.get('upkeep')?.value;

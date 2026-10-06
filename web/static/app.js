@@ -251,7 +251,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
 
 const downloadsDialog = $('#dlg-downloads');
 const STATUS_LABELS = {
-  finished: 'Finished, ready in Plex',
+  finished: 'Finished',
   downloading: 'Downloading',
   waiting: 'Waiting for a connection',
   starting: 'Getting started',
@@ -274,7 +274,8 @@ function timeLeft(seconds) {
 
 function downloadRow(item, everyone) {
   const status = item.status in STATUS_LABELS ? item.status : 'unknown';
-  const details = [STATUS_LABELS[status]];
+  // "Ready in Plex" is only said once Plex has been asked to pick the download up.
+  const details = [item.inPlex ? 'Finished, ready in Plex' : STATUS_LABELS[status]];
   if (status !== 'finished') details.push(`${item.progress}%`);
   details.push(item.size);
   if (item.etaSeconds != null) details.push(timeLeft(item.etaSeconds));
@@ -387,7 +388,10 @@ const SERVICES = [
   ['ollama', 'Ollama (the AI)'],
   ['jackett', 'Jackett (search)'],
   ['qbittorrent', 'qBittorrent (downloads)'],
+  ['plex', 'Plex (your library)'],
 ];
+// A service that is switched off is neither working nor broken.
+const statusTone = (status) => (status.off ? '' : status.ok ? 'ok' : 'bad');
 
 async function loadStatus() {
   const list = $('#status-list');
@@ -395,9 +399,7 @@ async function loadStatus() {
   try {
     const status = await api('/api/admin/status');
     list.replaceChildren(
-      ...SERVICES.map(([key, label]) =>
-        h('li', { class: status[key].ok ? 'ok' : 'bad' }, h('strong', {}, label), h('span', {}, status[key].detail)),
-      ),
+      ...SERVICES.map(([key, label]) => h('li', { class: statusTone(status[key]) }, h('strong', {}, label), h('span', {}, status[key].detail))),
     );
   } catch (err) {
     list.replaceChildren(h('li', { class: 'bad' }, err.message));
@@ -460,7 +462,37 @@ function editLibrary(library) {
   libraryForm.elements.name.focus();
 }
 
-function libraryRow(library) {
+// Which Plex folder a library's downloads land in, with a way to correct it.
+// Only shown when Plex is connected.
+function plexMatch(library, folders) {
+  const { plex } = library;
+  if (!plex) return null;
+  let text = `Plex: ${plex.title} (${plex.path})`;
+  if (plex.none) {
+    text = `Plex: ${plex.chosen === 'none' ? 'not in Plex' : 'no library with a matching folder'}. Plex is not told when a download here finishes.`;
+  }
+  const picked = folders.findIndex((folder) => folder.key === plex.key && folder.path === plex.path);
+  const choose = async (event) => {
+    const { value } = event.currentTarget;
+    try {
+      await api(`/api/admin/libraries/${library.id}/plex`, { method: 'PUT', body: { choice: /^\d+$/.test(value) ? folders[Number(value)] : value } });
+      await loadLibraries();
+    } catch (err) {
+      showNote(libraryNote, err.message, true);
+    }
+  };
+  const select = h(
+    'select',
+    { 'aria-label': `Plex folder for ${library.name}`, onchange: choose },
+    h('option', { value: 'auto' }, 'Match by folder name'),
+    ...folders.map((folder, i) => h('option', { value: String(i) }, `${folder.title}: ${folder.path}`)),
+    h('option', { value: 'none' }, 'Not in Plex'),
+  );
+  select.value = plex.chosen === 'folder' ? String(picked) : plex.chosen;
+  return h('div', { class: 'plex-match' }, h('div', { class: `folder-status ${plex.none ? '' : 'ok'}` }, text), select);
+}
+
+function libraryRow(library, plexFolders) {
   const status = folderStatus(library.folder);
   const actions = h('div', { class: 'row-actions' });
   if (library.folder.status === 'wrong-case') {
@@ -500,15 +532,19 @@ function libraryRow(library) {
     h('code', {}, library.savePath),
     details.length > 0 && h('div', { class: 'muted small' }, details.join(' · ')),
     h('div', { class: `folder-status ${status.tone}` }, status.text),
+    plexMatch(library, plexFolders),
     actions,
   );
 }
 
 async function loadLibraries() {
   try {
-    const { libraries } = await api('/api/admin/libraries');
+    const { libraries, plex } = await api('/api/admin/libraries');
     $('#library-empty').hidden = libraries.length > 0;
-    $('#library-list').replaceChildren(...libraries.map(libraryRow));
+    $('#library-list').replaceChildren(...libraries.map((library) => libraryRow(library, plex?.folders ?? [])));
+    const plexTrouble = $('#library-plex');
+    plexTrouble.hidden = !plex?.error;
+    if (plex?.error) plexTrouble.textContent = `Could not ask Plex which libraries it has: ${plex.error}`;
     // The notice on the chat page depends on whether any library exists.
     $('#setup-notice').hidden = libraries.length > 0;
   } catch (err) {
@@ -599,7 +635,7 @@ personalityForm.addEventListener('submit', async (event) => {
 
 const upkeepForm = $('#upkeep-form');
 const upkeepNote = $('#upkeep-note');
-const UPKEEP_TONES = { replaced: 'ok', 'gave-up': 'bad', problem: 'bad' };
+const UPKEEP_TONES = { replaced: 'ok', finished: 'ok', 'gave-up': 'bad', problem: 'bad' };
 
 function showUpkeep(state) {
   upkeepForm.elements.enabled.checked = state.enabled;

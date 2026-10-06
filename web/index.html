@@ -154,6 +154,7 @@
       <section id="tab-libraries" role="tabpanel" aria-labelledby="tabbtn-libraries" hidden>
         <p class="muted">Where downloads are saved. PiRick only ever saves into the folders listed here, and chooses between them from your description of each.</p>
         <p id="library-empty" class="form-note bad" hidden>No libraries yet. Nothing can be downloaded until you add one.</p>
+        <p id="library-plex" class="form-note bad" hidden></p>
         <ul id="library-list" class="library-list"></ul>
         <form id="library-form" class="stack" method="post" autocomplete="off">
           <h4 id="library-form-title">Add a library</h4>
@@ -196,7 +197,7 @@
       </section>
 
       <section id="tab-upkeep" role="tabpanel" aria-labelledby="tabbtn-upkeep" hidden>
-        <p class="muted">PiRick checks its downloads every 10 minutes. One that makes no progress for the time below is replaced with another copy when one exists, and the stuck one is then removed along with its partial files.</p>
+        <p class="muted">PiRick looks at its downloads every minute. When one finishes, it leaves a note for whoever asked for it and, if Plex is connected, asks Plex to pick it up. Every 10 minutes it also looks for downloads that have stopped: one that makes no progress for the time below is replaced with another copy when one exists, and the stuck one is then removed along with its partial files.</p>
         <form id="upkeep-form" class="stack" method="post">
           <label class="check"><input type="checkbox" name="enabled"> Replace stuck downloads automatically</label>
           <label>Hours without progress before a download counts as stuck

@@ -46,6 +46,24 @@ function think(env) {
   throw new Error(`OLLAMA_THINK must be empty, true, false, low, medium or high (got "${raw}")`);
 }
 
+// Empty leaves PiRick without Plex, which is how it ran before it could talk to it.
+function plexUrl(env) {
+  const raw = text(env, 'PLEX_URL');
+  if (!raw) return '';
+  let parsed = null;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    // Reported below.
+  }
+  const plain = parsed && /^https?:$/.test(parsed.protocol) && !parsed.search && !parsed.hash && !parsed.username && !parsed.password;
+  // The value is not repeated here: a token pasted into it must not reach the log.
+  if (!plain) {
+    throw new Error('PLEX_URL must be only the address of the Plex server, such as http://host.docker.internal:32400. The token goes in PLEX_TOKEN');
+  }
+  return raw.replace(/\/+$/, '');
+}
+
 // Express accepts a boolean, a hop count, or a list of trusted addresses.
 function trustProxy(env) {
   const raw = text(env, 'TRUST_PROXY', 'false');
@@ -93,6 +111,11 @@ export function loadConfig(env = process.env) {
       username: text(env, 'QBIT_USERNAME'),
       password: env.QBIT_PASSWORD ?? '',
       timeoutMs: 30_000,
+    },
+    plex: {
+      url: plexUrl(env),
+      token: text(env, 'PLEX_TOKEN'),
+      timeoutMs: 15_000,
     },
     searchLimit: integer(env, 'SEARCH_RESULT_LIMIT', 15, 3, 50),
     maxTorrentBytes: integer(env, 'MAX_TORRENT_SIZE_GB', 0, 0, 100000) * 1024 ** 3,

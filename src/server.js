@@ -50,13 +50,16 @@ async function main() {
     });
   }
   if (!settings.libraries().length) log.warn('no libraries are set up: downloads are refused until an admin adds one');
+  if (Boolean(config.plex.url) !== Boolean(config.plex.token)) {
+    log.warn('PLEX_URL and PLEX_TOKEN are both needed to connect Plex, and only one is set: carrying on without Plex');
+  }
   auth.purgeExpiredSessions();
   setInterval(() => auth.purgeExpiredSessions(), SESSION_CLEANUP_MS).unref();
 
   const server = app.listen(config.port, () => {
-    log.info('PiRick is listening', { port: config.port, model: config.ollama.model });
+    log.info('PiRick is listening', { port: config.port, model: config.ollama.model, plex: Boolean(config.plex.url && config.plex.token) });
   });
-  // Watches PiRick's own downloads and replaces the ones that get stuck.
+  // Watches PiRick's own downloads: replaces the ones that get stuck, and tells Plex about the ones that finish.
   upkeep.start();
 
   // As PID 1 in a container, Node gets no default signal handling.

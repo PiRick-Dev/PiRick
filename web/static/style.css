@@ -998,6 +998,16 @@ code {
   color: var(--danger);
 }
 
+.plex-match {
+  display: grid;
+  gap: 4px;
+}
+
+.plex-match select {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
 .presets {
   display: flex;
   flex-wrap: wrap;

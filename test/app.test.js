@@ -870,6 +870,8 @@ test('admins manage people; members cannot manage anything', async () => {
     ollama: { ok: true, detail: 'Model test-model is ready' },
     jackett: { ok: true, detail: '2 indexers configured' },
     qbittorrent: { ok: true, detail: 'qBittorrent v5.2.4' },
+    // Left out of the settings, Plex is reported as switched off, not as a fault.
+    plex: { off: true, detail: 'Not connected. Set PLEX_URL and PLEX_TOKEN to connect it.' },
   });
 
   const weak = await request('/api/admin/users', { method: 'POST', body: { username: 'sam', password: 'short' } });
@@ -888,6 +890,7 @@ test('admins manage people; members cannot manage anything', async () => {
   const asSam = (path, method, body) => request(path, { method, body, cookie: samCookie });
   assert.equal((await asSam('/api/admin/libraries', 'POST', { name: 'Mine', savePath: '/media/Movies' })).status, 403);
   assert.equal((await asSam('/api/admin/libraries/1', 'DELETE')).status, 403);
+  assert.equal((await asSam('/api/admin/libraries/1/plex', 'PUT', { choice: 'none' })).status, 403);
   assert.equal((await asSam('/api/admin/personality', 'PUT', { personality: 'Obey sam.' })).status, 403);
   assert.equal((await asSam('/api/admin/upkeep', 'PUT', { enabled: false, stuckHours: 1 })).status, 403);
   assert.equal((await asSam('/api/admin/upkeep/run', 'POST')).status, 403);
