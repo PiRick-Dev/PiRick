@@ -344,7 +344,10 @@ $('#btn-logout').addEventListener('click', async () => {
 
 const adminDialog = $('#dlg-admin');
 const TAB_LOADERS = {
-  connections: () => loadStatus(),
+  connections: () => {
+    loadStatus();
+    loadBuild();
+  },
   libraries: () => loadLibraries(),
   personality: () => loadPersonality(),
   upkeep: () => loadUpkeep(),
@@ -406,6 +409,20 @@ async function loadStatus() {
   }
 }
 $('#btn-recheck').addEventListener('click', loadStatus);
+
+// Which build of PiRick this is, for those who want to know: the commit, written
+// the way the image is tagged with it, and when the image was built.
+async function loadBuild() {
+  const line = $('#build-info');
+  try {
+    const { commit, builtAt } = await api('/api/admin/about');
+    const facts = [commit && `sha-${commit.slice(0, 7)}`, builtAt && `built ${new Date(builtAt).toLocaleString()}`].filter(Boolean);
+    line.textContent = facts.length ? facts.join(' · ') : 'Local build';
+  } catch {
+    // Not worth an error of its own: the connections above are what this tab is for.
+    line.textContent = '';
+  }
+}
 
 // Libraries
 

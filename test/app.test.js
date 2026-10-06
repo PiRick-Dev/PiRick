@@ -864,6 +864,18 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== album.hash);
 });
 
+test('an admin can see which build is running, when it is a published one', async () => {
+  // The image GitHub builds carries its commit and the time it was built.
+  const published = loadConfig({ PIRICK_COMMIT: '0123456789ABCDEF0123456789abcdef01234567', PIRICK_BUILT: '2026-10-05T18:30:00Z' });
+  assert.deepEqual(published.build, { commit: '0123456789abcdef0123456789abcdef01234567', builtAt: '2026-10-05T18:30:00.000Z' });
+  // Anything else has neither, and nonsense is not passed on to the page.
+  assert.deepEqual(loadConfig({}).build, { commit: '', builtAt: '' });
+  assert.deepEqual(loadConfig({ PIRICK_COMMIT: '<script>', PIRICK_BUILT: 'yesterday-ish' }).build, { commit: '', builtAt: '' });
+
+  assert.deepEqual(await getJson('/api/admin/about'), { commit: '', builtAt: '' });
+  assert.equal((await request('/api/admin/about', { cookie: null })).status, 401);
+});
+
 test('admins manage people; members cannot manage anything', async () => {
   const status = await getJson('/api/admin/status');
   assert.deepEqual(status, {
@@ -884,7 +896,7 @@ test('admins manage people; members cannot manage anything', async () => {
   assert.equal(duplicate.status, 409);
 
   const { cookie: samCookie } = await login('sam', 'sams-password');
-  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep', '/api/admin/folders?path=/']) {
+  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/about', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep', '/api/admin/folders?path=/']) {
     assert.equal((await request(path, { cookie: samCookie })).status, 403, path);
   }
   const asSam = (path, method, body) => request(path, { method, body, cookie: samCookie });

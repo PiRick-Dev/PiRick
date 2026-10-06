@@ -64,6 +64,16 @@ function plexUrl(env) {
   return raw.replace(/\/+$/, '');
 }
 
+// Which build this is. The published image carries both; anything else leaves them empty.
+function build(env) {
+  const commit = text(env, 'PIRICK_COMMIT').toLowerCase();
+  const builtAt = Date.parse(text(env, 'PIRICK_BUILT'));
+  return {
+    commit: /^[0-9a-f]{7,40}$/.test(commit) ? commit : '',
+    builtAt: Number.isNaN(builtAt) ? '' : new Date(builtAt).toISOString(),
+  };
+}
+
 // Express accepts a boolean, a hop count, or a list of trusted addresses.
 function trustProxy(env) {
   const raw = text(env, 'TRUST_PROXY', 'false');
@@ -117,6 +127,7 @@ export function loadConfig(env = process.env) {
       token: text(env, 'PLEX_TOKEN'),
       timeoutMs: 15_000,
     },
+    build: build(env),
     searchLimit: integer(env, 'SEARCH_RESULT_LIMIT', 15, 3, 50),
     maxTorrentBytes: integer(env, 'MAX_TORRENT_SIZE_GB', 0, 0, 100000) * 1024 ** 3,
   };

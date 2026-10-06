@@ -286,6 +286,9 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     res.json({ ollama: ollamaStatus, jackett: jackettStatus, qbittorrent: qbitStatus, plex: plexStatus });
   });
 
+  // Which build of PiRick this is: `{ commit, builtAt }`, both empty unless it runs from the published image.
+  admin.get('/about', (req, res) => res.json(config.build));
+
   // ---- Admin: libraries --------------------------------------------------------
 
   /** Folder names inside `folder` as qBittorrent sees them, or null when it cannot say. */

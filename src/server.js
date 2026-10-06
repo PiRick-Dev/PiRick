@@ -57,7 +57,12 @@ async function main() {
   setInterval(() => auth.purgeExpiredSessions(), SESSION_CLEANUP_MS).unref();
 
   const server = app.listen(config.port, () => {
-    log.info('PiRick is listening', { port: config.port, model: config.ollama.model, plex: Boolean(config.plex.url && config.plex.token) });
+    log.info('PiRick is listening', {
+      port: config.port,
+      model: config.ollama.model,
+      plex: Boolean(config.plex.url && config.plex.token),
+      build: config.build.commit.slice(0, 7) || 'not a published build',
+    });
   });
   // Watches PiRick's own downloads: replaces the ones that get stuck, and tells Plex about the ones that finish.
   upkeep.start();

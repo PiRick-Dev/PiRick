@@ -66,6 +66,8 @@ jobs:
             org.opencontainers.image.title=PiRick
             org.opencontainers.image.description=Chat with an LLM to find media with Jackett and download it with qBittorrent.
             org.opencontainers.image.licenses=MIT
+      - id: built
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -73,5 +75,9 @@ jobs:
           push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Kept in the image, so Admin > Connections can say which build is running.
+          build-args: |
+            PIRICK_COMMIT=${{ github.sha }}
+            PIRICK_BUILT=${{ steps.built.outputs.at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
