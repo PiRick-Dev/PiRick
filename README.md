@@ -293,7 +293,7 @@ Results go to `bench/results/main/`: `report.md` ranks the models and `transcrip
 
 Things to know:
 
-- Runs are saved as they finish. Stop it whenever you like; the same command carries on where it was.
+- Runs are saved as they finish. Stop it whenever you like; the same command carries on where it was. To play scenarios again although they are saved, for example after changing what PiRick tells the model, add `--scenarios <id>,<id> --again`; the newer runs replace the saved ones in the report.
 - It reads `OLLAMA_URL` and `OLLAMA_NUM_CTX` from `.env`. Models must already be pulled.
 - While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded are repeated.
 - Speed is the model's alone, because the stand-in indexer answers instantly. On a real setup add the time of each search.

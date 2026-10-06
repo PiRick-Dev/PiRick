@@ -517,13 +517,14 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
           size: formatBytes(result.size),
           seeders: result.seeders,
           age: age(result.published),
-          ...(film && { in_plex: true }),
+          // Said of the film, not of this copy: which copy Plex has is not known.
+          ...(film && { user_has_this_film: true }),
         };
       });
       const held = [...new Set([...(films?.values() ?? [])].map(filmLabel))];
       if (films?.has('asked')) tellInPlex(user, turn, `film ${films.get('asked').id}`);
       let plexSays;
-      if (held.length) plexSays = `Plex already has ${listOf(held)}.`;
+      if (held.length) plexSays = `Plex already has ${listOf(held)}. Which copy or quality it has is not known.`;
       else if (films && (mediaType !== 'any' || contents.some((parsed) => parsed.kind === 'movie'))) plexSays = 'Plex has no film with this title.';
       log.info('search', { user: user.username, query, also, mediaType, results: results.length, exact });
       const count = results.length === 1 ? '1 result' : `${results.length} results`;
@@ -548,7 +549,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
         ? 'Nothing is downloading yet. Once you know which one the user wants, call download with its id.'
         : 'Nothing is downloading yet. To get one of these, call download with its id; it also tells you if the user already has it.';
       if (held.length) {
-        nextStep = 'Nothing is downloading. The results marked in_plex are already in Plex: tell the user they have it, and do not download it again unless they say they want another copy.';
+        nextStep = 'Nothing is downloading. The user already has this film in Plex: tell them so. These results are other copies that could be fetched, not what is in Plex, so do not say which quality they have. Do not download one unless the user says they want another copy.';
       } else if (plexSays) {
         nextStep = `${nextStep} If the user only asked whether they have this, do not download: tell them they do not, and ask whether they would like it.`;
       }

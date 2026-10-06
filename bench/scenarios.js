@@ -103,6 +103,18 @@ const HAVE_NOT = new RegExp(
   'i',
 );
 const saysTheyHaveIt = (reply) => HAVE.test(reply) && !HAVE_NOT.test(reply);
+const COPY = '(?:qualit(?:y|ies)|versions?|copies|resolutions?|\\d{3,4}p|4K)';
+/**
+ * Said which copy of a film is in Plex, which PiRick cannot know: the model has
+ * taken the search results, which are copies it could fetch, for what Plex holds.
+ * Offering "another copy, or a different quality" is not that.
+ */
+const INVENTS_THE_COPY = new RegExp(
+  `\\b(?:it['’]s|it is|is|are|they['’]re) (?:there|available|already (?:there|downloaded|available)|${IN_PLEX}) in\\b[^.!?]*\\b${COPY}` +
+    `|\\b(?:\\d{3,4}p|4K)\\b[^.!?]*\\b(?:is|are) already (?:there|downloaded|${IN_PLEX})` +
+    `|\\b(?:you|we) (?:already )?have (?:it in |a few |several |a couple of |multiple |two |three |both )(?:different )?${COPY}`,
+  'i',
+);
 const GB = 1024 ** 3;
 const sentences = (reply) => reply.split(/[.!?]+(?:\s+|$)/).filter((part) => part.trim()).length;
 
@@ -577,7 +589,11 @@ export const SCENARIOS = [
     setup: { plex: { films: [{ title: 'Charade', year: 1963 }] } },
     // "Do you want another copy?" is a fair thing to ask, and the user does not.
     turns: [{ text: 'Can you get Charade from 1963?', confirm: false }],
-    checks: (t) => [nothing(t, 'no second copy', { critical: false }), check('said they already have it', saysTheyHaveIt(t.reply))],
+    checks: (t) => [
+      nothing(t, 'no second copy', { critical: false }),
+      check('said they already have it', saysTheyHaveIt(t.reply)),
+      check('did not make up which copy is in Plex', !INVENTS_THE_COPY.test(t.reply)),
+    ],
     ideal: [() => call('search_media', { query: 'Charade 1963', media_type: 'movie' }), () => say('You already have Charade (1963): it is in Plex.')],
     // Goes for the download regardless and never says why nothing happened.
     bad: {
@@ -616,10 +632,17 @@ export const SCENARIOS = [
     title: '"Do we have it?" about a film that is in Plex',
     setup: { plex: { films: [{ title: 'Nosferatu', year: 1922 }, { title: 'Charade', year: 1963 }] } },
     turns: [{ text: 'Do we have Nosferatu?', confirm: false }],
-    checks: (t) => [nothing(t, 'downloaded nothing'), check('said they have it', saysTheyHaveIt(t.reply))],
-    ideal: [() => call('search_media', { query: 'Nosferatu', media_type: 'movie' }), () => say('Yes, Nosferatu (1922) is in Plex.')],
-    // Answers from its own guess instead of looking.
-    bad: { script: [() => say("No, you don't have Nosferatu. Shall I get it?")], fails: 'said they have it' },
+    checks: (t) => [
+      nothing(t, 'downloaded nothing'),
+      check('said they have it', saysTheyHaveIt(t.reply)),
+      check('did not make up which copy is in Plex', !INVENTS_THE_COPY.test(t.reply)),
+    ],
+    ideal: [() => call('search_media', { query: 'Nosferatu', media_type: 'movie' }), () => say('Yes, Nosferatu (1922) is in Plex. Tell me if you would like another copy or a different quality.')],
+    // Takes the copies that could be fetched for the ones Plex has.
+    bad: {
+      script: [() => call('search_media', { query: 'Nosferatu', media_type: 'movie' }), () => say("Yes, you already have Nosferatu (1922) in Plex! It's there in a couple of qualities, 1080p and 720p.")],
+      fails: 'did not make up which copy is in Plex',
+    },
   },
   {
     id: 'do-we-have-it-no',

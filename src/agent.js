@@ -48,7 +48,7 @@ ${personality.trim()}
 
 // Only said when PiRick can see into Plex; without it the prompt is as it always was.
 const PLEX_RULES = `
-- PiRick can see what is already in Plex. search_media and find_show say what Plex has under "plex", and a search result the user already has is marked in_plex. Go by that, not by your own guess, and never download something Plex already has unless the user says they want another copy.
+- PiRick can see what is already in Plex. search_media and find_show say what Plex has under "plex". Go by that, not by your own guess, and never download something Plex already has unless the user says they want another copy. Search results are copies that could be fetched, never what is in Plex, so do not tell the user which quality or version they have.
 - When the user only asks whether they have something ("do we have…?", "is it in Plex?"), look it up with search_media or find_show and answer from what it says about Plex. That question is never a reason to download. If they have it, say so. If they do not, say so and ask whether they would like you to get it, and download only after they say yes.
 - When find_show leaves out seasons or episodes that Plex already has, download the plan for the rest and tell the user what they already had. Plex cannot tell whether a season is complete, so say how many episodes of it there are.`;
 

@@ -3,6 +3,7 @@
 //   npm run bench -- --models gemma4:e4b,gemma4:12b            two passes of everything
 //   npm run bench -- --models gemma4:12b --passes 5            carry on up to five passes
 //   npm run bench -- --models gemma4:12b --think off           the same model without thinking
+//   npm run bench -- --models gemma4:12b --scenarios a,b --again   play those again though they are saved
 //   npm run bench -- --models gemma4:12b --measure             only load it and note the memory it takes
 //   npm run bench -- --models scripted                         dry run with the ideal scripts
 //   npm run bench -- --report                                  rebuild the report only
@@ -43,6 +44,7 @@ const { values: args } = parseArgs({
     report: { type: 'boolean', default: false },
     measure: { type: 'boolean', default: false },
     force: { type: 'boolean', default: false },
+    again: { type: 'boolean', default: false },
   },
 });
 if (!Object.hasOwn(THINK, args.think)) throw new Error(`--think must be one of: ${Object.keys(THINK).join(', ')}`);
@@ -188,7 +190,8 @@ const key = (record) => `${configOf(record)}|${record.scenario}|${record.pass}`;
 const stale = (record) =>
   stoppedAtQuestion(SCENARIOS.find((scenario) => scenario.id === record.scenario) ?? { turns: [] }, record) ||
   ((record.pushWording ?? 1) < PUSH_WORDING && record.turns.some((turn) => turn.nudges > 0));
-const done = new Set(records.filter((record) => record.type === 'run' && !record.disturbed && !stale(record)).map(key));
+// With --again nothing counts as done: what PiRick tells the model has changed, and the newer run replaces the saved one.
+const done = new Set(args.again ? [] : records.filter((record) => record.type === 'run' && !record.disturbed && !stale(record)).map(key));
 
 for (const model of models) {
   const todo = [];
