@@ -260,19 +260,20 @@ What the comparison found (October 2026, Ollama 0.35.1, a 16 GB Radeon RX 6950 X
 
 | Model | Did the right thing | Critical failures | Typical wait | Graphics memory | In short |
 |---|---|---|---|---|---|
-| `gemma4:12b` | 94% | none in 180 | 7.7 s | 8.9 GB | The best that fits a 16 GB card. It often announces a download before making it, which PiRick catches at the cost of a few seconds. |
-| `gemma4:e4b` | 88% | 1 in 180 | 8.5 s | 4.4 GB | The default. Weaker when a title is unfamiliar or a judgement is called for, and once took an advert for the film. |
-| `ornith:9b` | 86% | 2 in 180 | 6.1 s | 5.2 GB | Steadiest speed, but twice picked one of two shows with the same name without asking. |
-| `granite4.1:8b` | 78% | 1 in 180 | 2.7 s | 6.2 GB | Fastest. Lists options with technical details, and once said it had cancelled a download, which PiRick cannot do. |
-| `qwen3.8:27b` | 94% | none in 72 | 26 s | 12.8 GB and part on the CPU | As good as `gemma4:12b`, at three times the wait and nearly all of the graphics card. |
+| `gemma4:12b` | 96% | none in 205 | 6.7 s | 8.9 GB | The best that fits a 16 GB card. It often announces a download before making it, which PiRick catches at the cost of a few seconds. |
+| `gemma4:e4b` | 90% | 1 in 205 | 8.2 s | 4.5 GB | The default. Weaker when a title is unfamiliar or a judgement is called for, and once took an advert for the film. |
+| `ornith:9b` | 88% | 2 in 205 | 5.8 s | 5.3 GB | Steadiest speed, but twice picked one of two shows with the same name without asking. |
+| `granite4.1:8b` | 80% | 1 in 205 | 2.7 s | 6.2 GB | Fastest. Lists options with technical details, and once said it had cancelled a download, which PiRick cannot do. |
+| `qwen3.8:27b` | 95% | none in 82 | 25 s | 12.8 GB and part on the CPU | Nearly as good as `gemma4:12b`, at close to four times the wait and nearly all of the graphics card. |
 
-Three things held across models:
+Four things held across models:
 
-- **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by more than half but costs accuracy: `gemma4:e4b` fell from 88% to 67% and `gemma4:12b` from 94% to 86%. Without thinking, `gemma4:12b` also said it had started two seasons when it had fetched one.
-- **Avoid "abliterated" builds.** The abliterated `gemma4:e4b` scored 74% against 88% for the normal build. It took the advert for the film both times it was offered, and claimed to have cancelled a download.
-- **Bigger is not better by itself.** A 24B Mistral scored 72% at 22 seconds a request.
+- **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by more than half but costs accuracy: `gemma4:e4b` fell from 90% to 72% and `gemma4:12b` from 96% to 88%. Without thinking, `gemma4:12b` also said it had started two seasons when it had fetched one.
+- **Avoid "abliterated" builds.** The abliterated `gemma4:e4b` scored 76% against 90% for the normal build. It took the advert for the film both times it was offered, and claimed to have cancelled a download.
+- **Bigger is not better by itself.** A 24B Mistral scored 77% at 22 seconds a request.
+- **What is already in Plex is the easy part.** With Plex connected, every model in the table got every request about things already there right, "do we have it?" included. PiRick works out what Plex has and what to leave out; the model only has to say so.
 
-Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
+Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
 
 If a model behaves badly, set `LOG_LEVEL=debug` to see each step it takes in `docker compose logs pirick`, or try a larger model.
 
