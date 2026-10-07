@@ -8,6 +8,7 @@ export const DEFAULT_MODE = 'auto';
 export const THEMES = [
   { id: 'sea', name: 'The sea' },
   { id: 'cinema', name: 'Cinema' },
+  { id: 'video-store', name: 'Video store' },
   { id: 'plain', name: 'Plain' },
 ];
 

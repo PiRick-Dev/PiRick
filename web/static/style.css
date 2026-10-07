@@ -261,6 +261,91 @@
   --mote: rgb(255 240 210 / 85%);
 }
 
+/* Video store. Light is the shop on a sunny afternoon; dark is the evening, lit by its neon sign. */
+:root[data-theme="video-store"] {
+  --bg: #ebe4d2;
+  --surface: #fffdf6;
+  --surface-2: #f1ead9;
+  --text: #251f33;
+  --muted: #5f5870;
+  --line: #d8cfba;
+  --accent: #0b6f78;
+  --accent-strong: #08565d;
+  --on-accent: #ffffff;
+  --bubble: #5b2d91;
+  --on-bubble: #ffffff;
+  --danger: #a3261b;
+  --good: #1f6f3d;
+  --shadow: 0 1px 2px rgb(37 31 51 / 10%), 0 8px 24px rgb(37 31 51 / 15%);
+  --backdrop: rgb(37 31 51 / 50%);
+  --chrome: #f4efe1;
+
+  --wall-top: #f4efe1;
+  --wall-low: #e6dcc3;
+  --sun: rgb(255 248 214 / 60%);
+  --stripe-1: #12a0a8;
+  --stripe-2: #f0629f;
+  --neon: #c9bfb4;
+  --neon-frame: #b9c4c2;
+  --carpet: #3d2f6e;
+  --carpet-fleck-1: #e0559a;
+  --carpet-fleck-2: #37b7c3;
+  --tv-screen: #2d3a40;
+  /* The stock, the posters and the fittings are in the same inks and paints at
+     any hour. After dark they are dimmed all together, not recoloured. */
+  --ink-navy: #1d2b5c;
+  --ink-sun: #ffd24a;
+  --ink-red: #e23b4e;
+  --ink-cream: #f6f0dd;
+  --ink-teal: #12a0a8;
+  --ink-pink: #f0629f;
+  --ink-purple: #6a3fb5;
+  --ink-black: #1f1d26;
+  --shelf: #a9794a;
+  --shelf-back: #6f4a2c;
+  --desk: #2f7d86;
+  --desk-top: #f0cf73;
+  --desk-panel: #276b73;
+  --tv-body: #57504a;
+  --tv-knob: #c9c2b4;
+  --till: #cfc6b2;
+  --metal: #9aa0a6;
+  --glass: rgb(222 240 243 / 80%);
+}
+
+:root[data-theme="video-store"][data-mode="dark"] {
+  --bg: #171331;
+  --surface: #201b3f;
+  --surface-2: #2b2552;
+  --text: #f0ecff;
+  --muted: #aaa3cc;
+  --line: #3d356b;
+  --accent: #ff7dbd;
+  --accent-strong: #ffa5d2;
+  --on-accent: #2a0718;
+  --bubble: #1a5f7c;
+  --on-bubble: #ecfaff;
+  --danger: #ff8f80;
+  --good: #6fd69a;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 8px 24px rgb(0 0 0 / 50%);
+  --backdrop: rgb(6 4 18 / 68%);
+  --chrome: #141127;
+
+  --wall-top: #141127;
+  --wall-low: #1f1940;
+  --stripe-1: #124650;
+  --stripe-2: #57224a;
+  --neon: #ff6fb5;
+  --neon-frame: #5fe3f0;
+  --neon-glow: rgb(255 111 181 / 30%);
+  --carpet: #130f2b;
+  --carpet-fleck-1: #5a2248;
+  --carpet-fleck-2: #1c4a56;
+  --tv-screen: #0c1116;
+  --tv-light: rgb(150 205 255 / 85%);
+  --tv-cast: rgb(120 180 255 / 22%);
+}
+
 *,
 *::before,
 *::after {
@@ -800,8 +885,390 @@ h4 {
   }
 }
 
-/* Nothing needs to move behind an open dialog. */
-body:has(dialog[open]) .set > * {
+/* ---- Scene: the video store ---- */
+
+:root[data-theme="video-store"] .set.video-store {
+  display: block;
+}
+
+.set.video-store {
+  --floor-h: clamp(36px, 7vh, 64px);
+  --shelf-h: 228px;
+  --desk-w: clamp(190px, 27vw, 320px);
+  --edge: max(2.5vw, calc(50% - 640px));
+  background: linear-gradient(var(--wall-top), var(--wall-low));
+}
+
+/* Everything in the shop that is printed, painted or for hire. After dark it
+   is dimmed as one, which leaves the sign and the television the only things lit. */
+:root[data-mode="dark"] .video-store .ware {
+  filter: brightness(0.42) saturate(0.85);
+}
+
+.video-store .ink-navy {
+  fill: var(--ink-navy);
+}
+
+.video-store .ink-sun {
+  fill: var(--ink-sun);
+}
+
+.video-store .ink-red {
+  fill: var(--ink-red);
+}
+
+.video-store .ink-cream {
+  fill: var(--ink-cream);
+}
+
+.video-store .ink-teal {
+  fill: var(--ink-teal);
+}
+
+.video-store .ink-pink {
+  fill: var(--ink-pink);
+}
+
+.video-store .ink-purple {
+  fill: var(--ink-purple);
+}
+
+.video-store .ink-black {
+  fill: var(--ink-black);
+}
+
+/* A planet's ring, on a poster and on a box. */
+.video-store .ring {
+  fill: none;
+  stroke: var(--ink-sun);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+/* Afternoon sun through the shop window, lying across the wall. */
+.video-store .sunbeam {
+  inset: 0;
+  background: linear-gradient(115deg, var(--sun), transparent 55%);
+  clip-path: polygon(0 10%, 30% 0, 52% 0, 0 58%);
+}
+
+/* A painted stripe round the walls, as shops of the time had. */
+.video-store .dado {
+  top: 44%;
+  right: 0;
+  left: 0;
+  height: 13px;
+  background: linear-gradient(var(--stripe-1) 0 55%, transparent 55% 72%, var(--stripe-2) 72%);
+}
+
+.video-store .pennants {
+  top: 52px;
+  left: 0;
+  width: 100%;
+  height: 40px;
+}
+
+.video-store .string {
+  fill: none;
+  stroke: var(--ink-black);
+  stroke-width: 1.5;
+}
+
+.video-store .poster {
+  width: clamp(62px, 7vw, 94px);
+}
+
+.video-store .poster-1 {
+  top: 17%;
+  left: var(--edge);
+  transform: rotate(-3deg);
+}
+
+.video-store .poster-3 {
+  top: 23%;
+  left: calc(var(--edge) + clamp(62px, 7vw, 94px) + 16px);
+  transform: rotate(2deg);
+}
+
+.video-store .poster-2 {
+  top: 36%;
+  right: calc(var(--edge) + 3vw);
+  transform: rotate(3deg);
+}
+
+/* The sign in the window. By day its tubes are grey glass; at night they are lit. */
+.video-store .sign {
+  top: 9%;
+  right: var(--edge);
+  width: clamp(120px, 15vw, 196px);
+  aspect-ratio: 224 / 142;
+}
+
+.video-store .sign svg,
+.video-store .tv svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.video-store .tube {
+  fill: none;
+  stroke: var(--neon);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.video-store .tube.frame {
+  stroke: var(--neon-frame);
+  stroke-width: 4;
+}
+
+.video-store .halo {
+  position: absolute;
+  inset: -40% -25%;
+  background: radial-gradient(closest-side, var(--neon-glow), transparent);
+  animation: hum 11s step-end infinite;
+}
+
+/* Cards standing on top of the shelves, saying what is where. */
+.video-store .genre {
+  bottom: calc(var(--floor-h) + var(--shelf-h) - 2px);
+  padding: 2px 9px 1px;
+  border: 2px solid var(--ink-black);
+  border-bottom: 0;
+  border-radius: 5px 5px 0 0;
+  background: var(--ink-cream);
+  color: var(--ink-black);
+  font: 800 11px/1.5 "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.video-store .genre-new {
+  left: 35%;
+  background: var(--ink-red);
+  color: var(--ink-cream);
+  font-size: 13px;
+}
+
+.video-store .genre-1 {
+  left: 54%;
+}
+
+.video-store .genre-2 {
+  left: 67%;
+  background: var(--ink-black);
+  color: var(--ink-sun);
+}
+
+.video-store .genre-3 {
+  left: 79%;
+  background: var(--ink-teal);
+}
+
+.video-store .genre-4 {
+  left: 90%;
+  background: var(--ink-sun);
+}
+
+/* Boxes facing out along the top, then two shelves of tapes, spine out. */
+.video-store .shelves {
+  bottom: var(--floor-h);
+  left: 0;
+  width: 100%;
+  height: var(--shelf-h);
+  border-top: 6px solid var(--shelf);
+  background: var(--shelf-back);
+}
+
+.video-store .board {
+  fill: var(--shelf);
+}
+
+/* Carpet with the bright flecks that every shop of its day had. */
+.video-store .carpet {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--floor-h);
+  background:
+    radial-gradient(circle at 22% 34%, var(--carpet-fleck-1) 0 2.5px, transparent 3px),
+    radial-gradient(circle at 68% 62%, var(--carpet-fleck-2) 0 2.5px, transparent 3px),
+    var(--carpet);
+  background-size:
+    58px 34px,
+    82px 46px,
+    auto;
+}
+
+/* It stands on the carpet, a little in front of the shelves, as the counter does. */
+.video-store .gumballs {
+  right: var(--edge);
+  bottom: calc(var(--floor-h) - 12px);
+  width: clamp(50px, 6vw, 78px);
+  aspect-ratio: 80 / 178;
+}
+
+.video-store .metal {
+  fill: var(--metal);
+}
+
+.video-store .glass {
+  fill: var(--glass);
+  stroke: var(--metal);
+  stroke-width: 2;
+}
+
+/* The counter: a television left on, the till, tapes waiting to go back on the shelves. */
+.video-store .tv {
+  bottom: calc(var(--floor-h) - 10px);
+  left: var(--edge);
+  width: var(--desk-w);
+  aspect-ratio: 320 / 200;
+}
+
+.video-store .desk {
+  fill: var(--desk);
+}
+
+.video-store .desk-top {
+  fill: var(--desk-top);
+}
+
+.video-store .desk-panel {
+  fill: var(--desk-panel);
+}
+
+.video-store .lettering {
+  fill: var(--ink-cream);
+  font: 800 15px "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 1.5px;
+  text-anchor: middle;
+}
+
+.video-store .lettering.dark {
+  fill: var(--ink-black);
+}
+
+.video-store .set-body {
+  fill: var(--tv-body);
+}
+
+.video-store .crt {
+  fill: var(--tv-screen);
+}
+
+.video-store .knob {
+  fill: var(--tv-knob);
+}
+
+.video-store .aerial {
+  fill: none;
+  stroke: var(--tv-knob);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.video-store .till {
+  fill: var(--till);
+}
+
+/* The picture on the screen, and the light it throws on the wall behind. Both
+   are laid over the drawing, which is why they are placed in fractions of it. */
+.video-store .picture {
+  position: absolute;
+  top: 7.5%;
+  left: 8.75%;
+  width: 26.25%;
+  height: 31%;
+  border-radius: 9% / 12%;
+  background:
+    repeating-linear-gradient(transparent 0 2px, rgb(0 0 0 / 22%) 2px 3px),
+    radial-gradient(closest-side, #ffffff, var(--tv-light));
+  animation: telly 6s step-end infinite;
+}
+
+.video-store .cast {
+  position: absolute;
+  inset: -60% 30% 25% -30%;
+  background: radial-gradient(closest-side, var(--tv-cast), transparent);
+  animation: telly 6s step-end infinite;
+}
+
+/* Behind a narrow page the walls are mostly hidden by the chat, so less is hung on them. */
+@media (max-width: 820px) {
+  .video-store .poster,
+  .video-store .genre-1,
+  .video-store .genre-2,
+  .video-store .genre-3,
+  .video-store .genre-4 {
+    display: none;
+  }
+
+  .video-store .genre-new {
+    left: 58%;
+  }
+}
+
+/* A neon tube mostly holds steady, with the odd dip. */
+@keyframes hum {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  31% {
+    opacity: 0.72;
+  }
+  32% {
+    opacity: 1;
+  }
+  33% {
+    opacity: 0.8;
+  }
+  34% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 0.86;
+  }
+  80% {
+    opacity: 1;
+  }
+}
+
+/* A television changes brightness with every cut in what it is showing. */
+@keyframes telly {
+  0%,
+  100% {
+    opacity: 0.92;
+  }
+  12% {
+    opacity: 0.7;
+  }
+  27% {
+    opacity: 1;
+  }
+  41% {
+    opacity: 0.8;
+  }
+  58% {
+    opacity: 0.95;
+  }
+  66% {
+    opacity: 0.62;
+  }
+  83% {
+    opacity: 0.88;
+  }
+}
+
+/* Nothing needs to move behind an open dialog. Some moving pieces sit inside a
+   drawing they belong to, so this reaches every piece, not only the outer ones. */
+body:has(dialog[open]) .set * {
   animation-play-state: paused;
 }
 
@@ -1141,7 +1608,7 @@ input[type="checkbox"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .set > *,
+  .set *,
   .helm {
     animation: none;
   }

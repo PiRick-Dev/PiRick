@@ -227,11 +227,16 @@ Each person chooses how PiRick looks and sounds, under **Account**. A choice app
 |---|---|
 | The sea | The ship at anchor. What everyone starts with. |
 | Cinema | A picture house: red curtains and rows of seats with the house lights up, a projector beam with dust drifting through it in the dark. |
+| Video store | A rental shop from the 1990s, cluttered as they were: boxes facing out, shelves of tapes, posters, a counter with a television and a till, and a sign that is lit in neon after dark. |
 | Plain | No picture, quiet colours. For anyone who finds the scene distracting. |
 
 <p align="center">
   <img src="docs/screenshots/theme-cinema-light.png" width="49%" alt="The Cinema theme in light: cream walls, red curtains at both sides, a gold pelmet across the top and two rows of red seats along the bottom">
   <img src="docs/screenshots/theme-cinema-dark.png" width="49%" alt="The Cinema theme in dark: the same hall with the lights down and a projector beam crossing it from the top right">
+</p>
+<p align="center">
+  <img src="docs/screenshots/theme-video-store-light.png" width="49%" alt="The Video store theme in light: bunting and film posters on a cream wall, a row of video boxes facing out above two shelves of black rental cases, cards naming the sections, a counter with a television, a till and a Please Rewind sticker, and a gumball machine">
+  <img src="docs/screenshots/theme-video-store-dark.png" width="49%" alt="The Video store theme in dark: the same shop in the evening, dim except for a pink and blue neon VIDEO OPEN sign and the glowing television">
 </p>
 
 Every theme comes in light and dark. "Match my device" follows the device's own setting, as PiRick always has; "Light" and "Dark" hold it one way. The sign-in page shows the look last used in that browser.
