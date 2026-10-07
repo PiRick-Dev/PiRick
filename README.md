@@ -121,6 +121,8 @@ Indexers match release names literally, and they are not careful with numbers. A
 - **Only relevant results.** Results are kept only if the release name contains the title that was asked for, with its words together and in order. When a year is given, copies from that year win. If nothing clearly matches, the model is told so and warned not to pick from what came back.
 - **Extra words dropped.** Release names do not contain cast or crew. The model is told to search by title and year alone; if a search with extra words after the year still finds nothing, PiRick retries without them.
 
+**Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. An advert that is named like an ordinary copy cannot be told by a rule like this. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
+
 Searches run one at a time, and a further spelling is only tried when the one before was not enough. This matters when indexers sit behind a Cloudflare solver such as FlareSolverr: each search then takes 10 to 20 seconds, and several sent at once come back with far fewer results, sometimes none. If your indexers are fast and direct, `JACKETT_SEARCHES_AT_ONCE` lets the whole-show planner look at several seasons together.
 
 Two more things to know about Jackett:
@@ -267,7 +269,7 @@ Things to know:
 - Everything in the catalogue was typed in by the public. Names are tidied and cut to length. Descriptions are cut to a few sentences, left out when they read as written to steer an AI, and never shown to the assistant next to anything it could download.
 - If one of the services cannot be reached, PiRick carries on as it does without a catalogue, and says so when asked a question it cannot look up.
 - Music, books, games and software are not looked up.
-- The catalogue adds three tools and several rules to what the AI model is given, which asks more of a small model. How each model copes with that has not been measured yet.
+- The catalogue adds three tools and several rules to what the AI model is given. In the comparison that cost nothing, and the smaller the model, the more the catalogue helped: see "Choosing a model".
 
 Film and show details come from Wikidata, Wikipedia and TVmaze, which is credited in **Admin > Connections** as well.
 
@@ -342,23 +344,25 @@ location / {
 
 ## Choosing a model
 
-`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. The default is `gemma4:e4b`, because it runs in under 5 GB of graphics memory. If you have 12 GB or more, `gemma4:12b` does the job better: set `OLLAMA_MODEL=gemma4:12b`.
+`OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. The default is `gemma4:e4b`, because it runs in under 5 GB of graphics memory. If you have 12 GB or more, `gemma4:12b` does the job better: set `OLLAMA_MODEL=gemma4:12b`. With 6 GB, `ornith:9b` is worth the extra room: it did as well as the default, and unlike the default it was not taken in by an advert.
 
-What the comparison found (October 2026, Ollama 0.35.1, a 16 GB Radeon RX 6950 XT; see "Comparing models" for how it works). These figures are from the 41 requests made without the catalogue. The 28 made with it have not been measured yet:
+What the comparison found (October 2026, Ollama 0.35.1 and 0.40.0, a 16 GB Radeon RX 6950 XT; see "Comparing models" for how it works). Each model was sent 41 requests without the catalogue and 28 with it:
 
-| Model | Did the right thing | Critical failures | Typical wait | Graphics memory | In short |
-|---|---|---|---|---|---|
-| `gemma4:12b` | 96% | none in 205 | 6.7 s | 8.9 GB | The best that fits a 16 GB card. It often announces a download before making it, which PiRick catches at the cost of a few seconds. |
-| `gemma4:e4b` | 90% | 1 in 205 | 8.2 s | 4.5 GB | The default. Weaker when a title is unfamiliar or a judgement is called for, and once took an advert for the film. |
-| `ornith:9b` | 88% | 2 in 205 | 5.8 s | 5.3 GB | Steadiest speed, but twice picked one of two shows with the same name without asking. |
-| `granite4.1:8b` | 80% | 1 in 205 | 2.7 s | 6.2 GB | Fastest. Lists options with technical details, and once said it had cancelled a download, which PiRick cannot do. |
-| `qwen3.8:27b` | 95% | none in 82 | 25 s | 12.8 GB and part on the CPU | Nearly as good as `gemma4:12b`, at close to four times the wait and nearly all of the graphics card. |
+| Model | Right without the catalogue | Right with it | Critical failures | Typical wait | Graphics memory | In short |
+|---|---|---|---|---|---|---|
+| `gemma4:12b` | 98% | 99% | none in 345 | 6.2 s | 8.9 GB | The best that fits a 16 GB card. It often announces a download before making it, which PiRick catches at the cost of a few seconds. |
+| `ornith:9b` | 88% | 96% | 2 in 345 | 5.7 s | 5.3 GB | The best of the small ones, and the steadiest in speed. Without the catalogue it twice picked one of two shows with the same name without asking. |
+| `gemma4:e4b` | 88% | 96% | 10 in 345 | 7.2 s | 4.5 GB | The default. Downloaded an advert in place of the film every time one was offered. Weaker when a title is unfamiliar or a judgement is called for. |
+| `granite4.1:8b` | 80% | 93% | 11 in 345 | 2.8 s | 6.2 GB | Fastest. Downloaded the advert every time as well. Lists options with technical details, and offers what PiRick cannot do: a reminder when a film comes out, and once a cancelled download. |
+| `qwen3.8:27b` | 95% | 98% | none in 138 | 22 s | 12.8 GB and part on the CPU | Nearly as good as `gemma4:12b`, at more than three times the wait and nearly all of the graphics card. |
 
-Four things held across models:
+Six things held across models:
 
-- **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by more than half but costs accuracy: `gemma4:e4b` fell from 90% to 72% and `gemma4:12b` from 96% to 88%. Without thinking, `gemma4:12b` also said it had started two seasons when it had fetched one.
-- **Avoid "abliterated" builds.** The abliterated `gemma4:e4b` scored 76% against 90% for the normal build. It took the advert for the film both times it was offered, and claimed to have cancelled a download.
-- **Bigger is not better by itself.** A 24B Mistral scored 77% at 22 seconds a request.
+- **Two of the small models cannot tell an advert from a film.** One search in the comparison returns, as its best-shared result, an advert named like a 1080p copy of the film. `gemma4:12b`, `ornith:9b` and `qwen3.8:27b` never took it. `gemma4:e4b` and `granite4.1:8b` took it every time, with the catalogue and without: that is all of the first one's critical failures and all but one of the second's. PiRick leaves out results that are programs, but an advert named like a copy is the model's to refuse. If your indexers are public ones, where such things are common, use one of the first three.
+- **The catalogue helps most where the model is weakest.** Thirteen of the requests are made both ways, in the same words. Without the catalogue `gemma4:e4b` got 80% of those right, `ornith:9b` 75% and `granite4.1:8b` 71%. With it they got 92%, 98% and 92%. `gemma4:12b`, with little to gain, went from 100% to 98%. Every model also made fewer searches, by about a fifth to a third. What the small models got wrong without it was the latest season of a show, the sequel to a film, a show kept under another of its names, and saying which episodes of a season could not be found.
+- **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by half or more. On the requests made with the catalogue it cost almost nothing: `gemma4:12b` stayed at 99% and `gemma4:e4b` went from 96% to 95%. On the rest it cost a good deal: `gemma4:12b` fell from 98% to 88% and `gemma4:e4b` from 88% to 72%, and without thinking `gemma4:12b` said it had started two seasons when it had fetched one. People ask for more than the catalogue covers, so the saving is not worth it.
+- **Avoid "abliterated" builds.** Without the catalogue the abliterated `gemma4:e4b` scored 76% against 88% for the normal build, had as many critical failures in 82 requests as the normal build had in 205, and claimed to have cancelled a download. With the catalogue the two scored the same.
+- **Bigger is not better by itself.** A 24B Mistral scored 76% without the catalogue, at 23 seconds a request.
 - **What is already in Plex is the easy part.** With Plex connected, every model in the table got every request about things already there right, "do we have it?" included. PiRick works out what Plex has and what to leave out; the model only has to say so.
 
 Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
@@ -384,7 +388,7 @@ Things to know:
 
 - Runs are saved as they finish. Stop it whenever you like; the same command carries on where it was. To play scenarios again although they are saved, for example after changing what PiRick tells the model, add `--scenarios <id>,<id> --again`; the newer runs replace the saved ones in the report.
 - It reads `OLLAMA_URL` and `OLLAMA_NUM_CTX` from `.env`. Models must already be pulled.
-- While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded are repeated.
+- While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded, or in which Ollama itself failed, are repeated.
 - Speed is the model's alone, because the stand-in indexer answers instantly. On a real setup add the time of each search.
 - On a machine with two graphics adapters, Ollama can load a model onto the weaker one, where it runs dozens of times slower. The benchmark refuses a model whose loading takes hardly any dedicated graphics memory; `--force` runs it anyway.
 - Scenarios and their checks are in `bench/scenarios.js`, what the stand-in indexer has in `bench/corpus.js`, and what the stand-in catalogue knows in `bench/works.js`. `npm test` proves every scenario can be passed and that known mistakes are caught.
@@ -440,6 +444,7 @@ What it does not do:
 
 - No two-factor login and no self-service sign-up or password recovery. Admins reset passwords.
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
+- PiRick leaves out search results that are programs, but it does not recognise an advert or a fake that is named like an ordinary copy. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
 - `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
 - With the catalogue on, the titles and names people ask about are sent to Wikidata, Wikipedia and TVmaze. Who asked is not.
