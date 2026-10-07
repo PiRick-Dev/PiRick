@@ -1,6 +1,6 @@
 // How PiRick puts what its catalogue knows into words, for the AI model and
 // for the status lines people read.
-import { countryName, sayDate } from './catalogue.js';
+import { countryName, sayDate, standing } from './catalogue.js';
 
 /** More seasons than this and the numbering is taken to be by year or by episode, which no plan can follow. */
 const MAX_GUIDE_SEASONS = 60;
@@ -98,4 +98,270 @@ export function heldAgainst(held, guide) {
   }
   const parts = [whole.length && `all of season${whole.length === 1 ? '' : 's'} ${numbered(whole)}`, ...partly].filter(Boolean);
   return listOf(parts);
+}
+
+// ---- The tools that only look things up ------------------------------------------
+//
+// Three tools answer questions from the catalogue: about one film or show, about
+// a person, and for ideas of what to watch. None of them searches for copies,
+// and none returns a download id, so a question cannot start a download by this
+// route. That is also why descriptions, which anyone may have written, are
+// passed on here and nowhere else.
+
+const MAX_SEASONS_LISTED = 12;
+const MAX_PLEX_MARKS = 15;
+
+const LOOK_UP_DEFINITION = {
+  type: 'function',
+  function: {
+    name: 'look_up',
+    description:
+      'Look up what is known about one film or TV show, to answer a question about it: what it is about, when it came out or is due, who made it and who is in it, what it follows, how many seasons and episodes it has and which have aired, and whether the user already has it. It only looks things up: it never searches for copies and never downloads anything.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'The name of the film or show, with its year if you know it. Example: "Nosferatu 1922".' },
+        kind: { type: 'string', enum: ['film', 'show'], description: 'Which of the two it is, when you know.' },
+      },
+      required: ['title'],
+    },
+  },
+};
+
+const PERSON_DEFINITION = {
+  type: 'function',
+  function: {
+    name: 'look_up_person',
+    description: 'Look up an actor, a director or another film-maker by name: the films and shows they are best known for. Use it for questions such as "what has she been in?" or "what else did he direct?".',
+    parameters: { type: 'object', properties: { name: { type: 'string', description: 'The name of the person.' } }, required: ['name'] },
+  },
+};
+
+const suggestDefinition = (genres) => ({
+  type: 'function',
+  function: {
+    name: 'suggest',
+    description:
+      'Suggest films or shows to watch. Give like for ones in the vein of a film or show the user names, or genre for well-known ones of a genre, or neither for what people are reading about most right now.',
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['film', 'show'], description: 'Whether films or shows are wanted.' },
+        like: { type: 'string', description: 'The name of a film or show to find others like, with its year if you know it.' },
+        genre: { type: 'string', enum: genres, description: 'A genre.' },
+      },
+      required: ['kind'],
+    },
+  },
+});
+
+/** An object without the keys that have nothing to say. */
+const said = (facts) => Object.fromEntries(Object.entries(facts).filter(([, value]) => value != null && value !== '' && !(Array.isArray(value) && !value.length)));
+const text = (value, most = 120) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, most);
+/** "Nosferatu 1922" and "Nosferatu (1922)" as a name and a year. */
+function nameAndYear(asked) {
+  const match = /^(.+?)[\s(]+((?:19|20)\d{2})\)?$/.exec(asked);
+  return match ? { title: match[1].trim(), year: Number(match[2]) } : { title: asked, year: null };
+}
+/** A line of a list: what it is, what it is said to be when that adds anything, and whether Plex has it. */
+const listLine = (entry, held) => `${titled(entry)}${entry.about && !SAYS_NOTHING_NEW.test(entry.about) ? `: ${shortly(entry.about)}` : ''}${held ? ' (already in Plex)' : ''}`;
+
+/**
+ * `catalogue` and `plex` are the clients; `askCatalogue` and `askPlex` call them
+ * and give undefined when they cannot be asked; `tell(user, turn, key)` notes
+ * that the person has been told Plex has something.
+ */
+export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, genres }) {
+  const UNREACHABLE = { error: 'The catalogue cannot be reached right now. Tell the user you cannot look that up at the moment.' };
+  const ONLY_LOOKED = 'This only looked it up: nothing was searched for and nothing is downloading.';
+
+  /** Which of some films and shows Plex has, as a set of their places in the list. Empty when Plex cannot say. */
+  async function inPlex(entries) {
+    const held = new Set();
+    await askPlex(async () => {
+      for (const [i, entry] of entries.slice(0, MAX_PLEX_MARKS).entries()) {
+        const has = entry.kind === 'show' ? await plex.show(entry.title, entry.year) : (await plex.films(entry.title, entry.year))[0];
+        if (has) held.add(i);
+      }
+    });
+    return held;
+  }
+
+  /** Works out which film or show is meant. Resolves to `{ thing, note }`, or `{ reply }` to hand straight back. */
+  async function identify(asked, kind, turn) {
+    const about = nameAndYear(asked);
+    const found = await askCatalogue(() => (kind === 'film' ? catalogue.findFilm(about) : kind === 'show' ? catalogue.findShow(about) : catalogue.findAny(about)));
+    if (!found) return { reply: UNREACHABLE };
+    const sort = kind ?? 'film or show';
+    const named = `“${about.title}”`;
+    if (found.none) {
+      turn.status(`Looked up ${named}: the catalogue knows no ${sort} of that name`, 'search');
+      return { reply: { found: false, catalogue: `The catalogue knows no ${sort} called ${named}.`, note: 'Tell the user that, and ask them to check the name.' } };
+    }
+    if (found.several) {
+      turn.status(`Looked up ${named}: ${found.several.length} share that name`, 'search');
+      const line = (thing) => (thing.kind === 'show' ? `the show ${showLine(thing, { about: true })}` : `the film ${filmLine(thing, { about: true })}`);
+      return {
+        reply: {
+          found: false,
+          catalogue: `More than one ${sort} is called ${named}.`,
+          which_one: found.several.map(line),
+          note: 'Nothing more was looked up. If what the user said settles which of these they mean, call the same tool again with that title and its year. Otherwise ask the user which one.',
+        },
+      };
+    }
+    const thing = found.one;
+    let note = '';
+    if (found.wrongYear) note = `No ${sort} called ${named} is from ${about.year}; this is the one of that name.`;
+    else if (found.inexact) note = `Nothing is called ${named}; this is the nearest.`;
+    return { thing, note };
+  }
+
+  async function aboutFilm(user, turn, film, note) {
+    const [about, series, held] = await Promise.all([
+      askCatalogue(() => catalogue.about(film)),
+      askCatalogue(() => catalogue.seriesOf(film)),
+      askPlex(async () => {
+        for (const name of [film.title, film.originalTitle].filter(Boolean)) {
+          const [has] = await plex.films(name, film.year);
+          if (has) return has;
+        }
+        return null;
+      }),
+    ]);
+    // Told here that they have it, the person may next ask for another copy.
+    if (held) tell(user, turn, `film ${held.id}`);
+    const state = standing(film);
+    let released = '';
+    if (state === 'out') released = film.date ? `It came out on ${sayDate(film.date)}.` : film.year ? `It came out in ${film.year}.` : '';
+    else if (state === 'due') released = `It is not out yet.${whenDue(film) ? ` It is due ${whenDue(film)}.` : ' No date has been given for it.'}`;
+    else if (film.year) released = `It is dated ${film.year}. Whether it is out yet is not known.`;
+    return said({
+      film: titled(film),
+      catalogue: note,
+      about: about ?? film.about,
+      released,
+      directed_by: film.directors,
+      with: film.cast,
+      from: film.countries,
+      genres: film.genres,
+      original_title: film.originalTitle,
+      // The films of its series in the order they came out, or failing that what it is known to follow.
+      series: series?.films.map(titled),
+      order: series ? '' : neighbours(film),
+      plex: held === undefined ? '' : held ? `Plex already has ${titled(held)}.` : 'Plex does not have it.',
+      note: `${ONLY_LOOKED} If the user wants it fetched, call search_media with this title and year.`,
+    });
+  }
+
+  async function aboutShow(user, turn, show, note) {
+    const guide = new Map(show.seasons.map((season) => [season.number, season]));
+    const held = await askPlex(async () => {
+      for (const name of show.names.slice(0, 4)) {
+        const under = await plex.show(name, show.year);
+        if (under) return under;
+      }
+      return null;
+    });
+    if (held?.seasons.size) tell(user, turn, `show ${held.title} looked up`);
+    const seasonLine = (season) => `season ${season.number}: ${count(season.episodes, 'episode')}${season.aired < season.episodes ? `, ${season.aired} aired so far` : ''}`;
+    const episodes = show.seasons.reduce((sum, season) => sum + season.episodes, 0);
+    // A long-running show's seasons are summed up, with the latest spelled out.
+    const seasons = show.seasons.length > MAX_SEASONS_LISTED ? [`${count(show.seasons.length, 'season')} and ${count(episodes, 'episode')} in all`, `the latest, ${seasonLine(show.seasons.at(-1))}`] : show.seasons.map(seasonLine);
+    const states = { ended: 'It has ended.', cancelled: 'It was cancelled.', running: 'It is still running.', upcoming: 'It has not started yet.', unsure: 'It is between seasons, with no word on whether there will be more.' };
+    return said({
+      show: titled(show),
+      catalogue: note,
+      about: show.about,
+      from: show.countries.map(countryName),
+      status: states[show.status],
+      seasons,
+      next_episode: show.next ? `season ${show.next.season} episode ${show.next.episode}${show.next.date ? `, due on ${sayDate(show.next.date)}` : ''}` : '',
+      created_by: show.creators,
+      with: show.cast,
+      genres: show.genres,
+      anime: show.anime ? 'It is anime.' : '',
+      other_names: show.names.filter((name) => name !== show.title).slice(0, 3),
+      plex: held === undefined ? '' : held?.seasons.size ? `Plex already has ${heldAgainst(held.seasons, show.anime ? new Map() : guide)}.` : 'Plex has none of it.',
+      note: `${ONLY_LOOKED} If the user wants it fetched, call find_show with this title.`,
+    });
+  }
+
+  const handlers = {
+    async look_up(user, args, turn) {
+      const asked = text(args.title);
+      if (!asked) return { error: 'A title is required.' };
+      turn.looked = true;
+      turn.emit({ type: 'working', text: `Looking up “${asked}”…` });
+      const { thing, note, reply } = await identify(asked, ['film', 'show'].includes(args.kind) ? args.kind : null, turn);
+      if (reply) return reply;
+      turn.status(`Looked up ${titled(thing)}`, 'search');
+      return thing.kind === 'show' ? aboutShow(user, turn, thing, note) : aboutFilm(user, turn, thing, note);
+    },
+
+    async look_up_person(user, args, turn) {
+      const name = text(args.name, 80);
+      if (!name) return { error: 'A name is required.' };
+      turn.looked = true;
+      turn.emit({ type: 'working', text: `Looking up ${name}…` });
+      const person = await askCatalogue(() => catalogue.person(name));
+      if (person === undefined) return UNREACHABLE;
+      if (!person || (!person.films.length && !person.shows.length)) {
+        turn.status(`Looked up ${name}: the catalogue knows no film-maker of that name`, 'search');
+        return { found: false, catalogue: `The catalogue knows no actor or film-maker called “${name}”.`, note: 'Tell the user that, and ask them to check the name.' };
+      }
+      turn.status(`Looked up ${person.name}`, 'search');
+      const parts = [...person.films.map((part) => ({ ...part, kind: 'film' })), ...person.shows.map((part) => ({ ...part, kind: 'show' }))];
+      const held = await inPlex(parts);
+      const line = (part) => `${titled(part)}, as ${listOf(part.as)}${held.has(parts.indexOf(part)) ? ' (already in Plex)' : ''}`;
+      return said({
+        person: person.name,
+        known_as: person.knownFor,
+        films: parts.filter((part) => part.kind === 'film').map(line),
+        shows: parts.filter((part) => part.kind === 'show').map(line),
+        note: `These are the best known of their work, not all of it. ${ONLY_LOOKED} If the user wants one fetched, call search_media for a film or find_show for a show, with its title and year.`,
+      });
+    },
+
+    async suggest(user, args, turn) {
+      const kind = args.kind === 'show' ? 'show' : 'film';
+      const like = text(args.like);
+      const genre = text(args.genre, 40).toLowerCase();
+      turn.looked = true;
+      turn.emit({ type: 'working', text: 'Looking for something to suggest…' });
+      let found;
+      let basis;
+      if (like) {
+        const { thing, reply } = await identify(like, kind, turn);
+        if (reply) return reply;
+        found = await askCatalogue(() => catalogue.like(thing));
+        if (found === undefined) return UNREACHABLE;
+        basis = `These are in the vein of ${titled(thing)}: the rest of its series if it has one, more by whoever made it, and well-known ${kind}s of the same kind.`;
+        turn.status(`Looked for ${kind}s like ${titled(thing)}`, 'search');
+        // The film itself is not a suggestion.
+        found = (found ?? []).filter((entry) => !(entry.title === thing.title && entry.year === thing.year));
+      } else if (genre) {
+        if (!genres.includes(genre)) return { error: `There is no such genre. Use one of: ${genres.join(', ')}.` };
+        found = await askCatalogue(() => catalogue.ofGenre(kind, genre));
+        if (found === undefined) return UNREACHABLE;
+        turn.status(`Looked for ${genre} ${kind}s`, 'search');
+        if (found === null) return { suggestions: [], note: `The catalogue keeps no list of ${genre} ${kind}s. Tell the user that, and offer ${kind === 'show' ? 'films of that genre' : 'another genre'} or what is popular instead.` };
+        basis = `These are well-known ${genre} ${kind}s.`;
+      } else {
+        found = await askCatalogue(() => catalogue.popular(kind));
+        if (found === undefined) return UNREACHABLE;
+        turn.status(`Looked for the ${kind}s read about most just now`, 'search');
+        basis = `These are the ${kind}s people are reading about most on Wikipedia just now. Some may not be out yet.`;
+      }
+      if (!found.length) return { suggestions: [], note: 'The catalogue has nothing to suggest for that. Tell the user so.' };
+      const held = await inPlex(found);
+      return {
+        suggestions: found.map((entry, i) => listLine(entry, held.has(i))),
+        basis,
+        note: `Offer these to the user as a numbered list, with the years. Do not add any of your own. ${ONLY_LOOKED} If the user picks one, call ${kind === 'show' ? 'find_show' : 'search_media'} with its title and year.`,
+      };
+    },
+  };
+
+  return { definitions: [LOOK_UP_DEFINITION, PERSON_DEFINITION, suggestDefinition(genres)], handlers };
 }

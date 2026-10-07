@@ -58,8 +58,9 @@ const MARKUP = /^\s*#{1,6}\s|^\s*\|.*\|\s*$|\]\(https?:/m;
  *                runs with no Plex, as it does when none is set up
  *   folders      folders on disk besides the usual ones: { '/media/TV': ['Name'] }
  *   catalogue    switches on the catalogue of what exists, which knows the films and
- *                shows in works.js. Without it PiRick runs with none, as it does
- *                when none is switched on
+ *                shows in works.js, or those given in their place as { films, shows,
+ *                mostRead }. Without it PiRick runs with none, as it does when none
+ *                is switched on
  * `connect(onUsage)` returns the model: an object with `chat()`, as createOllama gives.
  * `using` swaps parts of the world for others: `corpus` for what the indexer has
  * ({ search, byHash, byTitle }), `catalogue` for a catalogue client of one's own.
@@ -110,7 +111,7 @@ export function createWorld(setup = {}, connect, using = {}) {
       ])
     : null;
   const plex = createPlex(plexServer ? { url: PLEX_URL, token: PLEX_TOKEN, timeoutMs: 5000 } : { url: '', token: '' }, { fetch: plexServer?.fetch });
-  const catalogueServices = setup.catalogue ? catalogueStandIn(WORLD) : null;
+  const catalogueServices = setup.catalogue ? catalogueStandIn(setup.catalogue === true ? WORLD : setup.catalogue) : null;
   const catalogue = using.catalogue ?? createCatalogue({ enabled: Boolean(catalogueServices), ...SERVICES, timeoutMs: 5000 }, { fetch: catalogueServices?.fetch });
 
   const qbit = {

@@ -1,10 +1,10 @@
 import { randomInt } from 'node:crypto';
-import { sayDate, standing } from './catalogue.js';
+import { GENRES, sayDate, standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
 import { log } from './log.js';
-import { filmLine, guideOf, heldAgainst, listOf, neighbours, numbered, showLine, titled, whenDue } from './lookups.js';
+import { createLookups, filmLine, guideOf, heldAgainst, listOf, neighbours, numbered, showLine, titled, whenDue } from './lookups.js';
 import { BASE_TAG, formatBytes, userTag } from './qbittorrent.js';
 import { describeContents, describePart, lastAired, parseRelease, parseWanted, planShow } from './releases.js';
 import { createFinder, splitQuery } from './search.js';
@@ -1202,9 +1202,18 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     },
   };
 
+  // With a catalogue there are also tools that only look things up, for questions.
+  const lookups = catalogue?.enabled ? createLookups({ catalogue, plex, askCatalogue, askPlex, tell, genres: GENRES }) : null;
+  if (lookups) Object.assign(handlers, lookups.handlers);
+
   return {
     /** The tool definitions for one turn. They follow the libraries as they are now. */
-    definitions: () => [...(catalogue?.enabled ? [SEARCH_WITH_CATALOGUE, FIND_SHOW_WITH_CATALOGUE] : [SEARCH_DEFINITION, FIND_SHOW_DEFINITION]), downloadDefinition(settings.libraries()), LIST_DEFINITION],
+    definitions: () => [
+      ...(catalogue?.enabled ? [SEARCH_WITH_CATALOGUE, FIND_SHOW_WITH_CATALOGUE] : [SEARCH_DEFINITION, FIND_SHOW_DEFINITION]),
+      downloadDefinition(settings.libraries()),
+      LIST_DEFINITION,
+      ...(lookups?.definitions ?? []),
+    ],
 
     /** What the tools record about one user message as the model works on it. */
     newTurn: (emit, status) => ({
@@ -1220,6 +1229,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       have: false,
       // The catalogue settled it: there is nothing to fetch, and saying so is a complete answer.
       known: false,
+      // Something was looked up to answer a question, which is not a search for a copy.
+      looked: false,
       searches: new Map(),
       folderQuestions: new Set(),
     }),
