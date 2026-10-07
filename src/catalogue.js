@@ -39,12 +39,13 @@ const MAX_GENRES_OF_ITS_OWN = 3;
 // How many of yesterday's most-read Wikipedia pages are looked through for films and shows.
 const MOST_READ_CHECKED = 200;
 const DAY_MS = 86_400_000;
+const ASKED_TOO_OFTEN_MS = 1500;
 
 // One of several same-named things is taken without asking only when it is far
 // better known than the next. Wikidata measures a film by how many Wikipedias
 // write about it, TVmaze a show by a weight out of 100.
 const CLEARLY = {
-  film: (a, b) => a.known >= 10 && a.known >= b.known * 3,
+  film: (a, b) => a.known >= 10 && a.known >= b.known * 2.5,
   show: (a, b) => a.known >= 50 && a.known - b.known >= 30,
 };
 // The two measures on one scale, for telling a film from a show of the same name.
@@ -167,10 +168,18 @@ function within(wanted, key) {
   return at === want.length;
 }
 
-/** How far a thing's names are from the name asked for: 3 the same, 2 the same words inside a longer name, 1 a letter or two off, 0 not it. */
-export function likeness(wanted, keys) {
+/** What a name with a subtitle is called for short: "Caminandes" of "Caminandes: Llama Drama". */
+const leadOf = (name) => /^(.{2,}?)(?::\s|\s[-–—]\s)/.exec(String(name ?? ''))?.[1] ?? null;
+const leadsOf = (names) => [...new Set(names.map(leadOf).filter(Boolean).map(nameKey).filter(Boolean))];
+
+/**
+ * How far a thing's names are from the name asked for: 3 the same, 2 the same
+ * words inside a longer name or the name without its subtitle (`leads`), 1 a
+ * letter or two off, 0 not it.
+ */
+export function likeness(wanted, keys, leads = []) {
   if (keys.includes(wanted)) return 3;
-  if (keys.some((key) => within(wanted, key))) return 2;
+  if (leads.includes(wanted) || keys.some((key) => within(wanted, key))) return 2;
   return keys.some((key) => misspelt(wanted, key)) ? 1 : 0;
 }
 
@@ -186,7 +195,7 @@ export function likeness(wanted, keys) {
  * and `inexact` when the name is not quite the one asked for.
  */
 export function pick(candidates, wanted, clearly = CLEARLY.film) {
-  const scored = candidates.map((candidate) => ({ candidate, like: likeness(wanted.key, candidate.keys) })).filter((entry) => entry.like > 0);
+  const scored = candidates.map((candidate) => ({ candidate, like: likeness(wanted.key, candidate.keys, candidate.leads) })).filter((entry) => entry.like > 0);
   if (!scored.length) return { none: true };
   // A misspelling is only believed when nothing has the name as given.
   const strong = scored.filter((entry) => entry.like >= 2);
@@ -322,6 +331,7 @@ function filmFound(entity) {
     countries: [],
     known: Object.keys(entity.sitelinks ?? {}).length,
     keys: keysOf(names),
+    leads: leadsOf(names),
     about: describedAs(entity),
     firm: false,
   };
@@ -354,6 +364,7 @@ function filmFrom(entity, names) {
     seriesId: idsOf(entity, P.series)[0] ?? null,
     names: all,
     keys: keysOf(all),
+    leads: leadsOf(all),
     anime: kinds.some((id) => ANIME_KINDS.has(id)) || (animated && (idsOf(entity, P.country).includes(JAPAN) || idsOf(entity, P.language).includes(JAPANESE))),
     genres: named(idsOf(entity, P.genre), 3),
     page: entity.sitelinks?.enwiki?.title ?? null,
@@ -394,6 +405,7 @@ function showFound(show) {
     countries: country ? [String(country).toUpperCase()] : [],
     known: Number(show.weight) || 0,
     keys: keysOf([title]),
+    leads: leadsOf([title]),
     about: cleanAbout(show.summary, ABOUT_MAX),
     firm: true,
   };
@@ -429,6 +441,7 @@ function showFrom(show, now) {
     cast: unique((parts.cast ?? []).map((entry) => cleanName(entry.person?.name)).filter(Boolean)).slice(0, MAX_CAST),
     names,
     keys: keysOf(names),
+    leads: leadsOf(names),
     anime: show.type === 'Animation' && show.language === 'Japanese',
     genres: (show.genres ?? []).map(cleanName).filter(Boolean).slice(0, 3),
     imdb: /^tt\d+$/.test(show.externals?.imdb ?? '') ? show.externals.imdb : null,
@@ -438,20 +451,26 @@ function showFrom(show, now) {
 // ---- The client ----------------------------------------------------------------
 
 /** `fetch` can be replaced, which the benchmark does to stand in for the services. `now` likewise, for dates. */
-export function createCatalogue(config, { fetch: send = fetch, now = Date.now } = {}) {
+export function createCatalogue(config, { fetch: send = fetch, now = Date.now, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const kept = new Map();
 
   async function get(service, url) {
     let res;
-    try {
-      res = await send(url, {
-        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
-        // Wikipedia sends a page's other spellings on to the page; nothing else here has cause to redirect.
-        redirect: service === 'Wikipedia' ? 'follow' : 'error',
-        signal: AbortSignal.timeout(config.timeoutMs),
-      });
-    } catch (err) {
-      throw new UpstreamError('catalogue', `Cannot reach ${service} (${describeError(err)})`);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        res = await send(url, {
+          headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
+          // Wikipedia sends a page's other spellings on to the page; nothing else here has cause to redirect.
+          redirect: service === 'Wikipedia' ? 'follow' : 'error',
+          signal: AbortSignal.timeout(config.timeoutMs),
+        });
+      } catch (err) {
+        throw new UpstreamError('catalogue', `Cannot reach ${service} (${describeError(err)})`);
+      }
+      // Asked too often, a service wants a moment's peace and then answers.
+      if (res.status !== 429 || attempt > 1) break;
+      await res.body?.cancel();
+      await pause(ASKED_TOO_OFTEN_MS);
     }
     if (res.status === 404) {
       await res.body?.cancel();
@@ -623,7 +642,7 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now } 
       for (const found of list) if (!pool.has(found.id)) pool.set(found.id, found);
     };
     const choose = async () => {
-      const named = [...pool.values()].filter((found) => likeness(wanted.key, found.keys) > 0);
+      const named = [...pool.values()].filter((found) => likeness(wanted.key, found.keys, found.leads) > 0);
       const unsure = named.filter((found) => !found.firm).sort((a, b) => b.known - a.known).slice(0, MAX_NAMED);
       if (unsure.length) await source.firm(unsure);
       return pick(named.filter((found) => found.firm), wanted, source.clearly);
@@ -704,8 +723,9 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now } 
       const parts = [...roles]
         .map(([part, role]) => ({ ...listed(full.get(part)), ...role }))
         .filter((part) => part.title)
-        // What they both made and appeared in is most their own; then their trade; then how well known it is.
-        .sort((a, b) => b.as.length - a.as.length || Number(b.as.includes(knownFor)) - Number(a.as.includes(knownFor)) || a.rank - b.rank);
+        // What they both made and appeared in is most their own. After that, the best known of each thing
+        // they do, turn about, so that what a director directed is not buried under what she acted in.
+        .sort((a, b) => b.as.length - a.as.length || a.rank - b.rank || Number(b.as.includes(knownFor)) - Number(a.as.includes(knownFor)));
       const of = (kind, most) => parts.filter((part) => part.kind === kind).slice(0, most).map(({ title, year, as }) => ({ title, year, as }));
       return { name: labelOf(person.get(id)), knownFor, films: of('film', MAX_FILMS_OF_PERSON), shows: of('show', MAX_SHOWS_OF_PERSON) };
     });

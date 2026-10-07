@@ -130,10 +130,28 @@ test('a service that cannot be reached is named, and the other still answers', a
   assert.equal((await catalogue.findFilm({ title: 'Charade' })).one.year, 1963);
 });
 
-test('being asked to slow down, and a request Wikidata will not serve, are said plainly', async () => {
-  const busy = createCatalogue({ enabled: true, ...SERVICES, timeoutMs: 5000 }, { fetch: async () => new Response('', { status: 429 }) });
+test('asked too often, a service is given a moment and asked once more', async () => {
+  const server = world();
+  const pauses = [];
+  let refusals = 1;
+  const flaky = async (address, options) => (refusals-- > 0 ? new Response('', { status: 429 }) : server.fetch(address, options));
+  const patient = createCatalogue({ enabled: true, ...SERVICES, timeoutMs: 5000 }, { fetch: flaky, pause: async (ms) => pauses.push(ms) });
+  assert.equal((await patient.findShow({ title: 'Brindlemoor' })).one.title, 'Brindlemoor');
+  assert.deepEqual(pauses, [1500]);
+
+  // Still refused after that, it is said plainly and not asked a third time.
+  let asked = 0;
+  const refusing429 = async () => {
+    asked += 1;
+    return new Response('', { status: 429 });
+  };
+  const busy = createCatalogue({ enabled: true, ...SERVICES, timeoutMs: 5000 }, { fetch: refusing429, pause: async () => {} });
   await assert.rejects(busy.findShow({ title: 'Brindlemoor' }), { message: 'TVmaze is being asked too often and wants PiRick to slow down' });
+  assert.equal(asked, 2);
   await assert.rejects(busy.findFilm({ title: 'Charade' }), { message: 'Wikidata is being asked too often and wants PiRick to slow down' });
+});
+
+test('a request Wikidata will not serve is said plainly', async () => {
   const refusing = createCatalogue({ enabled: true, ...SERVICES, timeoutMs: 5000 }, { fetch: async () => new Response(JSON.stringify({ error: { code: 'maxlag', info: 'Waiting for a database server' } }), { status: 200 }) });
   await assert.rejects(refusing.findFilm({ title: 'Charade' }), { message: 'Wikidata refused a request (maxlag)' });
 });
@@ -257,6 +275,9 @@ test('how like the name asked for something is', () => {
   assert.equal(likeness(nameKey('Brindelmoor'), keys('Brindlemoor')), 1);
   assert.equal(likeness(nameKey('the cabnet of dr caligary'), keys('The Cabinet of Dr. Caligari')), 1);
   assert.equal(likeness(nameKey('Metropolus'), keys('Metropolis')), 1);
+  // A name with a subtitle is known by what comes before it too, which counts for more than a near spelling.
+  assert.equal(likeness(nameKey('Caminandes'), keys('Caminandes: Llama Drama'), keys('Caminandes')), 2);
+  assert.equal(likeness(nameKey('Caminandes'), keys('Caminandes: Llama Drama')), 0);
   // Short names are not second-guessed, and a different name is a different name.
   assert.equal(likeness(nameKey('Rook'), keys('Book')), 0);
   assert.equal(likeness(nameKey('Metropolis'), keys('Nosferatu')), 0);
@@ -283,6 +304,9 @@ test('choosing among things with the same name', () => {
   const charades = [thing(1, 'Charade', 1953, 3), thing(2, 'Charade', 1963, 51)];
   assert.deepEqual(pick(charades, wanted('charade')), { one: charades[1], others: 1 });
   assert.deepEqual(pick(charades, wanted('Charade', { year: 1965 })), { one: charades[1], others: 1, wrongYear: true });
+  // Two and a half times as well known is far enough; not quite twice is not.
+  assert.equal(pick([thing(1, 'Charade', 1927, 22), thing(2, 'Charade', 2017, 59)], wanted('Charade')).one.id, 2);
+  assert.ok(pick([thing(1, 'Charade', 1960, 32), thing(2, 'Charade', 2001, 60)], wanted('Charade')).several);
   // Three times nothing is still nothing: two obscure films are not told apart.
   assert.ok(pick([thing(1, 'Charade', 1953, 3), thing(2, 'Charade', 1963, 0)], wanted('Charade')).several);
   // A famous film and its famous remake are not told apart either.
@@ -369,6 +393,21 @@ test('what is typed cannot steer the search', async () => {
     // What is left is words, some marked as roughly spelt by PiRick itself, and nothing else.
     assert.match(typed, /^[\p{Ll}\p{N}~ ]*$/u, typed);
   }
+});
+
+test('a name with a subtitle is found by what comes before it, in preference to a near spelling', async () => {
+  const catalogue = clientFor(world());
+  // Three films begin "Caminandes:", and nothing is called just that.
+  const shorts = await catalogue.findFilm({ title: 'Caminandes' });
+  assert.equal(shorts.inexact, true);
+  assert.deepEqual(shorts.several.map((film) => film.title).sort(), ['Caminandes: Gran Dillama', 'Caminandes: Llama Drama', 'Caminandes: Llamigos']);
+  // A show known by a longer name, beside one whose name is a letter off what was asked for.
+  const server = catalogueStandIn({ shows: [{ id: 1, name: 'Wrenfeld', year: 2020, weight: 45, seasons: { 1: 6 } }, { id: 2, name: 'Wrenfield: The Cross Years', year: 2023, weight: 90, seasons: { 1: 28 } }] });
+  const found = await clientFor(server).findShow({ title: 'Wrenfield' });
+  assert.equal(found.one.title, 'Wrenfield: The Cross Years');
+  assert.equal(found.inexact, true);
+  // Asked for by its own name, the other is still itself.
+  assert.equal((await clientFor(server).findShow({ title: 'Wrenfeld' })).one.id, 1);
 });
 
 test('films that share a name are offered together unless something tells them apart', async () => {
@@ -550,6 +589,16 @@ test('a person is found by name, with what they are known for', async () => {
   assert.equal(fenwick.knownFor, 'actor');
   assert.deepEqual(fenwick.shows, [{ title: 'Brindlemoor', year: 2015, as: ['actor', 'creator'] }]);
   assert.deepEqual(fenwick.films, []);
+  // What someone made is not buried under what they only appeared in: the best known of each, turn about.
+  const both = catalogueStandIn({
+    films: [
+      { title: 'First Light', year: 2001, known: 50, cast: ['Maud Pellham'] },
+      { title: 'Second Wind', year: 2003, known: 40, cast: ['Maud Pellham'] },
+      { title: 'Third Rail', year: 2005, known: 30, cast: ['Maud Pellham'] },
+      { title: 'Her Own Film', year: 2010, known: 5, directors: ['Maud Pellham'] },
+    ],
+  });
+  assert.deepEqual((await clientFor(both).person('Maud Pellham')).films.map((part) => `${part.title} as ${part.as}`), ['First Light as actor', 'Her Own Film as director', 'Second Wind as actor', 'Third Rail as actor']);
   // A misspelt name, and nobody at all.
   assert.equal((await catalogue.person('Buster Keeton')).name, 'Buster Keaton');
   assert.equal(await catalogue.person('Zorblax Quillfeather'), null);

@@ -380,14 +380,17 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     const named = `“${asked.title}”`;
     const otherwise = sure ? '' : ' If the user is after something else of this name (an album, a book, a game), call search_media again with media_type set to that.';
 
-    if (found.none) {
+    // No film has exactly that name. A show may: "Pioneer One" is not the film "Pioneer One: The Film".
+    if (found.none || found.inexact) {
       const show = await askCatalogue(() => catalogue.findShow({ title: asked.title, year: asked.year }));
       const exact = show && !show.none && !show.inexact ? (show.one ?? show.several[0]) : null;
-      if (!exact) return { says: [`The catalogue knows no film${sure ? '' : ' or show'} called ${named}.`], unknown: sure ? 'film' : 'film or show' };
-      const says = `The catalogue lists ${titled(exact)} as a TV show, not a film.`;
-      if (!sure) return { says: [`${says} If that is what the user wants, call find_show for it.`] };
-      turn.status(`Looked up ${named}: it is a TV show`, 'search');
-      return { output: { results: [], catalogue: says, note: 'Nothing was searched for. Call find_show for it instead.' } };
+      if (exact) {
+        const says = `The catalogue lists ${titled(exact)} as a TV show, not a film.`;
+        if (!sure) return { says: [`${says} If that is what the user wants, call find_show for it.`] };
+        turn.status(`Looked up ${named}: it is a TV show`, 'search');
+        return { output: { results: [], catalogue: says, note: 'Nothing was searched for. Call find_show for it instead.' } };
+      }
+      if (found.none) return { says: [`The catalogue knows no film${sure ? '' : ' or show'} called ${named}.`], unknown: sure ? 'film' : 'film or show' };
     }
     if (!sure && found.inexact) {
       const films = found.one ? [found.one] : found.several;
@@ -450,12 +453,15 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (!found) return undefined;
     const named = `“${wanted.name}”`;
 
-    if (found.none) {
+    // No show has exactly that name. A film may.
+    if (found.none || found.inexact) {
       const film = await askCatalogue(() => catalogue.findFilm({ title: wanted.name, year: wanted.year }));
       const exact = film && !film.none && !film.inexact ? (film.one ?? film.several[0]) : null;
-      if (!exact) return { says: [`The catalogue knows no show called ${named}.`], unknown: true };
-      turn.status(`Looked up ${named}: it is a film`, 'search');
-      return { output: { found: false, catalogue: `The catalogue lists ${titled(exact)} as a film, not a TV show.`, note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' } };
+      if (exact) {
+        turn.status(`Looked up ${named}: it is a film`, 'search');
+        return { output: { found: false, catalogue: `The catalogue lists ${titled(exact)} as a film, not a TV show.`, note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' } };
+      }
+      if (found.none) return { says: [`The catalogue knows no show called ${named}.`], unknown: true };
     }
     const wrongYear = found.wrongYear ? `No show called ${named} began in ${wanted.year}.` : '';
     if (found.several) {

@@ -248,11 +248,13 @@ export function catalogueStandIn({ films = [], shows = [], mostRead = [] } = {},
     const scored = shows
       .map((show) => {
         const names = [show.name, ...(show.akas ?? [])].map(words);
-        // The share of the words asked for that some name of the show has, slips forgiven.
-        const score = Math.max(...names.map((name) => asked.filter((word) => name.some((other) => nearly(word, other))).length / Math.max(asked.length, name.length)));
-        return { score, show };
+        // The share of the words asked for that some name of the show has, slips forgiven. A name that
+        // is longer than what was asked for still counts, only for less.
+        const scores = names.map((name) => ({ share: asked.filter((word) => name.some((other) => nearly(word, other))).length / Math.max(asked.length, 1), extra: Math.max(0, name.length - asked.length) }));
+        const best = scores.sort((a, b) => b.share - a.share || a.extra - b.extra)[0];
+        return { score: best.share - best.extra / 100, share: best.share, show };
       })
-      .filter((entry) => asked.length && entry.score >= 0.5)
+      .filter((entry) => asked.length && entry.share >= 0.5)
       .sort((a, b) => b.score - a.score || (b.show.weight ?? 0) - (a.show.weight ?? 0));
     return json(scored.slice(0, 10).map(({ score, show }) => ({ score, show: showOf(show) })));
   }

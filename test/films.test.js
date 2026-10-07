@@ -180,6 +180,28 @@ test('a show asked for as a film is sent the right way', async () => {
   }
 });
 
+test('a show is not taken for the film that is named after it, nor a film for the show', async () => {
+  const world = {
+    films: [{ title: 'Copperhollow: The Film', year: 2025, known: 30 }, { title: 'Nosferatu', year: 1922, known: 60 }],
+    shows: [{ id: 1, name: 'Copperhollow', year: 2024, weight: 65, country: 'US', seasons: { 1: 10, 2: 10 } }, { id: 2, name: 'Nosferatu: The Series', year: 2020, weight: 40, country: 'DE', seasons: { 1: 8 } }],
+  };
+  const chat = talkTo({ catalogue: world });
+  try {
+    // "Copperhollow" is the show. Only its film is called "Copperhollow: The Film".
+    const show = await chat.say('Get Copperhollow', [film('Copperhollow')], 'Shall I get the show?');
+    assert.deepEqual(show.outputs[0], { results: [], catalogue: 'The catalogue lists Copperhollow (2024) as a TV show, not a film.', note: 'Nothing was searched for. Call find_show for it instead.' });
+    const itsFilm = await chat.say('No, the film', [film('Copperhollow The Film')], 'I could not find a copy.');
+    assert.match(itsFilm.outputs[0].catalogue, /^This is Copperhollow: The Film \(2025\)\.$/);
+    // And the other way about.
+    const aFilm = await chat.say('Get the show Nosferatu', [call('find_show', { title: 'Nosferatu' })], 'That is a film. Shall I get it?');
+    assert.deepEqual(aFilm.outputs[0], { found: false, catalogue: 'The catalogue lists Nosferatu (1922) as a film, not a TV show.', note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' });
+    const itsShow = await chat.say('No, the series', [call('find_show', { title: 'Nosferatu: The Series' })], 'I could not find a copy.');
+    assert.match(itsShow.outputs[0].catalogue, /^This is Nosferatu: The Series \(2020, Germany, 1 season\)\.$/);
+  } finally {
+    chat.close();
+  }
+});
+
 // Small models often leave the kind of thing out. Most such searches are for a film.
 test('a search that does not say what kind of thing is wanted still goes by a film of exactly that name', async () => {
   const any = (query) => call('search_media', { query });
