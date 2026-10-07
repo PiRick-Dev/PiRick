@@ -238,6 +238,19 @@ test('a show kept under another of its names goes into the folder it has, with n
   }
 });
 
+test('a show named with a description after it is still the show', async () => {
+  for (const title of ['The Vampires, the French serial 1915', 'The Vampires, the French serial', 'The Vampires - the 1915 serial']) {
+    const chat = pirick();
+    try {
+      const { outputs } = await chat.say('Get season 1 of The Vampires, the French serial from 1915', [show({ title, season: 1 }), get('TV', 'The Vampires')], 'Done.');
+      assert.equal(outputs[0].catalogue, 'This is Les Vampires (1915, France, 1 season).', title);
+      assert.equal(chat.world.trace().added[0].savePath, '/media/TV/Les Vampires', title);
+    } finally {
+      chat.close();
+    }
+  }
+});
+
 test('an anime is marked as one, and its guide is not held against what is found', async () => {
   const chat = pirick();
   try {

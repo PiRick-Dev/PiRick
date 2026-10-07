@@ -233,6 +233,21 @@ export function splitCountry(title) {
   return country && match[2] === match[2].toUpperCase() ? { name: match[1].trim(), country } : { name: String(title ?? '').trim(), country: null };
 }
 
+// A name with a description after it: "The Vampires, the French serial", "Metropolis - the 1927 one".
+const DESCRIBED = /^(.{2,}?)\s*(?:,|\s[-–—])\s*((?:the|a|an|that|this|from|with|by|starring|directed|made)\b.*)$/i;
+
+/**
+ * The name alone, where a description follows it, as `{ name, year }` with any
+ * year the description gives. Null when nothing reads as a description: a comma
+ * is part of many names.
+ */
+export function withoutDescription(title) {
+  const match = DESCRIBED.exec(String(title ?? '').trim());
+  if (!match) return null;
+  const year = /\b(1[89]\d\d|20\d\d)\b/.exec(match[2]);
+  return { name: match[1].trim(), year: year ? Number(year[1]) : null };
+}
+
 /** The words of a name, with nothing a search would read as an instruction to it: no punctuation, and no AND, OR or NOT in capitals. */
 const searchWords = (text) => String(text ?? '').replace(/['’]/g, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
@@ -679,7 +694,13 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     const full = async (found) => (await source.details(found)) ?? found;
     return one ? { one: await full(one), ...rest } : { several: await Promise.all(several.map(full)), ...rest };
   }
-  const found = (kind, asked) => remembered(`find ${kind} ${nameKey(asked.title)} ${asked.year ?? ''} ${asked.country ?? ''}`, SEARCH_FRESH_MS, () => find(kind, asked));
+  const named = (kind, asked) => remembered(`find ${kind} ${nameKey(asked.title)} ${asked.year ?? ''} ${asked.country ?? ''}`, SEARCH_FRESH_MS, () => find(kind, asked));
+  async function found(kind, asked) {
+    const choice = await named(kind, asked);
+    // Nothing has all of it for a name. If it ends in a description, what comes before that is the name.
+    const plain = choice.none ? withoutDescription(asked.title) : null;
+    return plain ? named(kind, { ...asked, title: plain.name, year: asked.year ?? plain.year }) : choice;
+  }
 
   const findFilm = (asked) => found('film', asked);
   /** Which show a name means. A country may follow the name: "Kestrelmere US". */

@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 process.env.LOG_LEVEL = 'error';
 
 const { build } = await import('../src/build.js');
-const { GENRES, MAX_CHOICES, cleanAbout, cleanName, countryName, createCatalogue, likeness, nameKey, pick, sayDate, splitCountry, standing } = await import('../src/catalogue.js');
+const { GENRES, MAX_CHOICES, cleanAbout, cleanName, countryName, createCatalogue, likeness, nameKey, pick, sayDate, splitCountry, standing, withoutDescription } = await import('../src/catalogue.js');
 const { loadConfig } = await import('../src/config.js');
 const { UpstreamError } = await import('../src/errors.js');
 const { SERVICES, catalogueStandIn } = await import('../bench/catalogue.js');
@@ -414,6 +414,27 @@ test('a name with a subtitle is found by what comes before it, in preference to 
   assert.equal(found.inexact, true);
   // Asked for by its own name, the other is still itself.
   assert.equal((await clientFor(server).findShow({ title: 'Wrenfeld' })).one.id, 1);
+});
+
+test('a name given with a description after it is found by the name', async () => {
+  assert.deepEqual(withoutDescription('The Vampires, the French serial'), { name: 'The Vampires', year: null });
+  assert.deepEqual(withoutDescription('Metropolis - the 1927 one'), { name: 'Metropolis', year: 1927 });
+  assert.deepEqual(withoutDescription('Charade, the'), { name: 'Charade', year: null });
+  // A comma is part of many names, and so is a hyphen.
+  for (const name of ['Brindlemoor, Minister', 'Wrenfield Cross', 'Kestrel-Mere the Second']) assert.equal(withoutDescription(name), null, name);
+
+  const catalogue = clientFor(world());
+  assert.equal((await catalogue.findFilm({ title: 'Metropolis, the Fritz Lang one' })).one.title, 'Metropolis');
+  assert.equal((await catalogue.findAny({ title: 'Metropolis, the silent film' })).one.title, 'Metropolis');
+  // A year in the description tells namesakes apart; without one they are still offered together.
+  assert.equal((await catalogue.findFilm({ title: 'Dr. Jekyll and Mr. Hyde, the 1920 one with John Barrymore' })).one.year, 1920);
+  assert.equal((await catalogue.findFilm({ title: 'Dr. Jekyll and Mr. Hyde, the silent one' })).several.length, 3);
+  // A name with a comma of its own is found whole, and is not cut short.
+  const whole = await catalogue.findFilm({ title: 'Nosferatu, a Symphony of Horror' });
+  assert.equal(whole.one.title, 'Nosferatu');
+  assert.equal(whole.inexact, undefined);
+  // What is not there is still not there.
+  assert.deepEqual(await catalogue.findFilm({ title: 'The Zorblax Chronicles, the lost one' }), { none: true });
 });
 
 test('films that share a name are offered together unless something tells them apart', async () => {
