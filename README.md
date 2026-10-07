@@ -267,7 +267,7 @@ Things to know:
 - Everything in the catalogue was typed in by the public. Names are tidied and cut to length. Descriptions are cut to a few sentences, left out when they read as written to steer an AI, and never shown to the assistant next to anything it could download.
 - If one of the services cannot be reached, PiRick carries on as it does without a catalogue, and says so when asked a question it cannot look up.
 - Music, books, games and software are not looked up.
-- The catalogue adds three tools and several rules to what the AI model is given, which asks more of a small model. "Choosing a model" says how each one fared.
+- The catalogue adds three tools and several rules to what the AI model is given, which asks more of a small model. How each model copes with that has not been measured yet.
 
 Film and show details come from Wikidata, Wikipedia and TVmaze, which is credited in **Admin > Connections** as well.
 
@@ -344,7 +344,7 @@ location / {
 
 `OLLAMA_MODEL` must support tool calling: `ollama show <model>` lists `tools` under Capabilities. The default is `gemma4:e4b`, because it runs in under 5 GB of graphics memory. If you have 12 GB or more, `gemma4:12b` does the job better: set `OLLAMA_MODEL=gemma4:12b`.
 
-What the comparison found (October 2026, Ollama 0.35.1, a 16 GB Radeon RX 6950 XT; see "Comparing models" for how it works):
+What the comparison found (October 2026, Ollama 0.35.1, a 16 GB Radeon RX 6950 XT; see "Comparing models" for how it works). These figures are from the 41 requests made without the catalogue. The 28 made with it have not been measured yet:
 
 | Model | Did the right thing | Critical failures | Typical wait | Graphics memory | In short |
 |---|---|---|---|---|---|
