@@ -54,7 +54,7 @@ You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere 
    docker compose logs pirick
    ```
 
-4. Open `http://<this-machine>:8787`, sign in as `admin`, and open **Admin**. The **Connections** section shows whether Ollama, Jackett and qBittorrent are reachable, with the reason if not. Fix `.env` and run `docker compose up -d` again until all three are green. Plex is listed there too. It is optional, and reads "Not connected" until you set it up: see "Connecting Plex".
+4. Open `http://<this-machine>:8787`, sign in as `admin`, and open **Admin**. The **Connections** section shows whether Ollama, Jackett and qBittorrent are reachable, with the reason if not. Fix `.env` and run `docker compose up -d` again until all three are green. Plex and the catalogue are listed there too. Both are optional: see "Connecting Plex" and "A catalogue of what exists".
 
 5. Open **Admin > Libraries** and add the folders downloads should go into, for example Movies, TV and Anime. PiRick refuses to download until at least one exists. See "Libraries" below.
 
@@ -146,7 +146,7 @@ Everything for one show goes into the same folder. One request may start at most
 
 Things to know:
 
-- PiRick has no episode guide. If a season should have ten episodes and the indexers only have eight as single files, it gets the eight and cannot tell that two are missing.
+- Without a catalogue, PiRick has no episode guide. If a season should have ten episodes and the indexers only have eight as single files, it gets the eight and cannot tell that two are missing. With one it can: see "A catalogue of what exists".
 - When two different shows share a name (say a 1963 and a 2005 series), PiRick does not mix them: it asks which one is meant.
 - Release names that cannot be read (unusual naming) are left out of these plans.
 
@@ -211,11 +211,65 @@ PLEX_TOKEN=your-token
 
 Things to know:
 
-- Plex knows which episodes it has, not how many a season should have. PiRick reports the number and leaves the judgement to you. For a whole show it takes every season before the last one you have to be complete, and looks for single episodes missing from that last one.
+- Plex knows which episodes it has, not how many a season should have. PiRick reports the number and leaves the judgement to you. For a whole show it takes every season before the last one you have to be complete, and looks for single episodes missing from that last one. With the catalogue on, PiRick knows how many there should be, and none of this guessing is needed.
 - Films and shows are matched by title and year. Capitals, punctuation and numbers written as words do not matter, but something filed in Plex under a quite different name is not recognised and may be fetched again.
 - Music and books are not checked against Plex.
 - If Plex is down when someone asks for something, PiRick carries on as it does without Plex.
 - Use an `http://` address on your own network. If Plex is set to require secure connections (Settings > Network), that is refused: set it to "Preferred".
+
+## A catalogue of what exists
+
+PiRick works without one. Switched on, PiRick no longer depends on the AI model's memory for which films and shows exist, who made them and how many episodes there are. That memory is thin in a small model, and blank for anything newer than the model.
+
+**Setting it up.** Add one line to `.env` and run `docker compose up -d`:
+
+```
+CATALOGUE=on
+```
+
+There is no account and no key. Films and people are looked up in [Wikidata](https://www.wikidata.org/), shows and their episode guides in [TVmaze](https://www.tvmaze.com/), and a few lines about a film in [Wikipedia](https://en.wikipedia.org/). **Admin > Connections** shows whether they answer. The PiRick container has to be able to reach the internet.
+
+**What leaves your network.** The titles and names people ask about are sent to those three services, from your server's address. Who asked is not. While the catalogue is off, nothing is sent.
+
+**Films.** Before the indexers are searched, PiRick asks the catalogue which film is meant:
+
+| The catalogue says | What PiRick does |
+|---|---|
+| One film, or one far better known than its namesakes | Searches once, under the proper title and year. A misspelling, another language's title or a wrong year no longer costs extra searches, and a wrong year is said to be wrong. |
+| Several films share the name | Searches for nothing yet. The assistant gets up to five, each with its year, director and cast, and either matches what the person said ("the one with John Barrymore") or asks. |
+| Not out yet | Searches for nothing, since a copy offered before release is a fake. Says when it is due. The person can say to look anyway. |
+| It is a show | Has the assistant treat it as one. |
+| Nothing by that name | Searches once, and says it could not be found. |
+
+**Shows.** The catalogue supplies the episode guide PiRick otherwise lacks:
+
+- A plan covers every season that has aired. A season nobody has a copy of is reported as not found, and so are single episodes: "season 3: episodes 7 and 8".
+- What has not aired yet is told apart from what could not be found. A season still being shown is fetched episode by episode.
+- "The latest season" is worked out by PiRick. A season or episode that does not exist is said not to.
+- Two shows with one name are told apart by year or country before anything is searched for.
+- A show's folder is named by the catalogue, so it is the same every time, and a folder it already has under another of its names is reused. PiRick no longer asks whether "The Vampires" belongs in "Les Vampires".
+- With Plex connected, PiRick knows whether Plex has all of a season. A complete season is reported as there. Of a partial one, only the missing episodes are fetched.
+
+**Questions.** With the catalogue on, the assistant also answers questions, without searching the indexers and without downloading anything:
+
+| Asked | Answered from |
+|---|---|
+| "What is it about?", "Who is in it?", "Is it out yet?", "Is there a sequel?", "How many seasons does it have?" | The catalogue |
+| "Do we have it?" | Plex, in a second or two instead of after a search |
+| "What has Buster Keaton been in?" | The catalogue: up to ten films and five shows a person is best known for |
+| "Something like Nosferatu?", "A good horror film?", "What's popular?" | The catalogue: up to eight suggestions, marked where Plex already has one |
+
+Things to know:
+
+- Suggestions are modest. "Something like" means the rest of a series, more by the same director, and well-known films of the same genre. Genres are as Wikidata files them, which is loosely. "Popular" means what Wikipedia's readers looked up most yesterday, so it leans towards films not out yet.
+- When several films share a name, PiRick takes one without asking only if it is far better known than the rest. Sometimes it asks for a year where a person would have guessed.
+- For anime the episode guide is not held against what is found, because releases are seldom numbered the way a guide numbers them.
+- Everything in the catalogue was typed in by the public. Names are tidied and cut to length. Descriptions are cut to a few sentences, left out when they read as written to steer an AI, and never shown to the assistant next to anything it could download.
+- If one of the services cannot be reached, PiRick carries on as it does without a catalogue, and says so when asked a question it cannot look up.
+- Music, books, games and software are not looked up.
+- The catalogue adds three tools and several rules to what the AI model is given, which asks more of a small model. "Choosing a model" says how each one fared.
+
+Film and show details come from Wikidata, Wikipedia and TVmaze, which is credited in **Admin > Connections** as well.
 
 ## Themes and personalities
 
@@ -322,7 +376,7 @@ npm run bench -- --models gemma4:12b --think off    # the same model with thinki
 npm run bench -- --report                           # rebuild the report from the saved runs
 ```
 
-Each run builds a throwaway PiRick in memory, with the real prompt, tools and reply check, and sends it one of 41 requests: films and shows asked for plainly, vaguely, misspelt or in Spanish; requests where it should ask first; things that are already in Plex, and questions about whether they are; downloads that fail; a search result that is an advert and one that carries instructions for the AI; a personality to keep up. Jackett, qBittorrent and Plex are stand-ins inside the benchmark, which is never told where the real ones are, so nothing is searched for or downloaded. A run is judged by what happened, such as which release reached the stand-in qBittorrent and in which folder, not by a second AI's opinion of the wording. A model that checks before downloading ("shall I get the 1080p one?") is told yes and judged on what it does next: checking first is counted, but only failing to follow through is a failure.
+Each run builds a throwaway PiRick in memory, with the real prompt, tools and reply check, and sends it one of 69 requests: films and shows asked for plainly, vaguely, misspelt or in Spanish; requests where it should ask first; things that are already in Plex, and questions about whether they are; downloads that fail; a search result that is an advert and one that carries instructions for the AI; a personality to keep up. Of these, 28 are made with the catalogue on: a film not out yet, a season that does not exist or is still being shown, namesakes to tell apart, and questions about films, shows and people that must not turn into downloads. Jackett, qBittorrent, Plex and the catalogue's services are stand-ins inside the benchmark, which is never told where the real ones are, so nothing is searched for or downloaded. A run is judged by what happened, such as which release reached the stand-in qBittorrent and in which folder, not by a second AI's opinion of the wording. A model that checks before downloading ("shall I get the 1080p one?") is told yes and judged on what it does next: checking first is counted, but only failing to follow through is a failure.
 
 Results go to `bench/results/main/`: `report.md` ranks the models and `transcripts/` holds every conversation. For each model the report gives how often it did the right thing, its critical failures (the wrong thing downloaded, a download without asking when it should have asked or when it was only asked a question, a false "it's downloading"), how often PiRick had to correct it behind the scenes, how long a request took, how many searches it made, and how much memory it used.
 
@@ -333,7 +387,7 @@ Things to know:
 - While it runs it keeps Ollama busy and loads one model after another, so a live PiRick sharing that Ollama will be slow. Runs during which another model got loaded are repeated.
 - Speed is the model's alone, because the stand-in indexer answers instantly. On a real setup add the time of each search.
 - On a machine with two graphics adapters, Ollama can load a model onto the weaker one, where it runs dozens of times slower. The benchmark refuses a model whose loading takes hardly any dedicated graphics memory; `--force` runs it anyway.
-- Scenarios, their checks and the stand-in indexer's contents are in `bench/scenarios.js` and `bench/corpus.js`. `npm test` proves every scenario can be passed and that known mistakes are caught.
+- Scenarios and their checks are in `bench/scenarios.js`, what the stand-in indexer has in `bench/corpus.js`, and what the stand-in catalogue knows in `bench/works.js`. `npm test` proves every scenario can be passed and that known mistakes are caught.
 
 ## Settings
 
@@ -361,6 +415,7 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `MAX_TORRENT_SIZE_GB` | Refuse anything larger; `0` = no limit | `0` |
 | `PLEX_URL` | Plex server address, with nothing after the port. Optional: see "Connecting Plex" | none |
 | `PLEX_TOKEN` | Plex access token. Needed together with `PLEX_URL` | none |
+| `CATALOGUE` | `on` to look films, shows and people up in Wikidata and TVmaze. Optional: see "A catalogue of what exists" | `off` |
 | `TRUST_PROXY` | Number of reverse proxies in front of PiRick, the proxy's address, or `false` | `false` (`1` in `.env.example`) |
 | `COOKIE_SECURE` | `auto`, `true` or `false` | `auto` |
 | `SESSION_IDLE_DAYS`, `SESSION_MAX_DAYS` | Sign out after this long unused / regardless | `7`, `30` |
@@ -376,6 +431,7 @@ What is in place:
 - Requests that change anything must come from PiRick's own pages (custom header plus the browser's same-origin signal), which blocks cross-site request forgery.
 - A strict Content Security Policy allows no inline or third-party scripts. Model replies and torrent titles are inserted as text, never as HTML.
 - The model never sees or supplies links, magnet addresses, folder paths, the Jackett key or the Plex token. It can only pick from results Jackett returned to that same person, by id, and only save into a library an admin defined. Show names it supplies are cleaned so they cannot point outside the library's folder.
+- What the catalogue returns was typed in by the public. Names are tidied and cut to length, and what a person types goes to its search as plain words. Descriptions are shortened, dropped when they read as instructions, and only ever given to the model in answers that contain nothing it could download.
 - The Plex token travels only in a request header to the address in `PLEX_URL`. It is never put in an address, a log line or an API reply. PiRick does not follow a redirect from Plex, which would carry the token elsewhere.
 - A download link from Jackett is followed only to a magnet or within the site it started on, never on to another address. A torrent file over 10 MB, or a magnet that is more than one line, is refused.
 - The container runs as a non-root user with a read-only filesystem, no Linux capabilities and no privilege escalation. Only `/data` is writable.
@@ -386,6 +442,7 @@ What it does not do:
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
 - `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
+- With the catalogue on, the titles and names people ask about are sent to Wikidata, Wikipedia and TVmaze. Who asked is not.
 
 ## Managing people
 

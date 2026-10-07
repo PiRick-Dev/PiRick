@@ -337,20 +337,20 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
         found = await askCatalogue(() => catalogue.like(thing));
         if (found === undefined) return UNREACHABLE;
         basis = `These are in the vein of ${titled(thing)}: the rest of its series if it has one, more by whoever made it, and well-known ${kind}s of the same kind.`;
-        turn.status(`Looked for ${kind}s like ${titled(thing)}`, 'search');
+        turn.status(`Suggested ${kind}s like ${titled(thing)}`, 'search');
         // The film itself is not a suggestion.
         found = (found ?? []).filter((entry) => !(entry.title === thing.title && entry.year === thing.year));
       } else if (genre) {
         if (!genres.includes(genre)) return { error: `There is no such genre. Use one of: ${genres.join(', ')}.` };
         found = await askCatalogue(() => catalogue.ofGenre(kind, genre));
         if (found === undefined) return UNREACHABLE;
-        turn.status(`Looked for ${genre} ${kind}s`, 'search');
+        turn.status(`Suggested ${genre} ${kind}s`, 'search');
         if (found === null) return { suggestions: [], note: `The catalogue keeps no list of ${genre} ${kind}s. Tell the user that, and offer ${kind === 'show' ? 'films of that genre' : 'another genre'} or what is popular instead.` };
         basis = `These are well-known ${genre} ${kind}s.`;
       } else {
         found = await askCatalogue(() => catalogue.popular(kind));
         if (found === undefined) return UNREACHABLE;
-        turn.status(`Looked for the ${kind}s read about most just now`, 'search');
+        turn.status(`Suggested the ${kind}s read about most just now`, 'search');
         basis = `These are the ${kind}s people are reading about most on Wikipedia just now. Some may not be out yet.`;
       }
       if (!found.length) return { suggestions: [], note: 'The catalogue has nothing to suggest for that. Tell the user so.' };
