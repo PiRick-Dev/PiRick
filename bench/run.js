@@ -29,6 +29,8 @@ const MAX_ATTEMPTS = 3;
 // the model took the old words, so it is played again; every other saved run
 // would come out the same and is kept.
 const PUSH_WORDING = 2;
+// What a run ends with when Ollama itself fails. A model that is only slow ends with "timed out", and that is counted.
+const OLLAMA_GAVE_WAY = /Lost the connection to Ollama mid-reply \((?!timed out)|Ollama failed:|Ollama returned HTTP 5/;
 const GB = 1024 ** 3;
 // How long memory is given to be released after a model is unloaded.
 const SETTLE_MS = 3000;
@@ -159,7 +161,9 @@ async function runOnce(model, scenario, pass) {
     // Without Ollama there is nothing to measure, and recording failures would only mislead.
     const down = trace.turns.find((turn) => /Cannot reach Ollama|is not available: run/.test(turn.error ?? ''));
     if (down) throw new Error(down.error);
-    const disturbed = live && (await loaded()).some((entry) => !isModel(entry, model));
+    // Ollama giving way part-way through (its connection dropped, its server ended) is not the model's doing.
+    const broke = trace.turns.find((turn) => OLLAMA_GAVE_WAY.test(turn.error ?? ''));
+    const disturbed = live && (Boolean(broke) || (await loaded()).some((entry) => !isModel(entry, model)));
     const record = {
       type: 'run',
       model,
@@ -180,8 +184,13 @@ async function runOnce(model, scenario, pass) {
       searches: trace.searches,
     };
     save(record);
-    if (!disturbed || attempt >= MAX_ATTEMPTS) return record;
-    console.log('    another model was loaded during that run; repeating it');
+    if (!disturbed) return record;
+    if (attempt >= MAX_ATTEMPTS) {
+      // Ollama failing every time is something to mend, not to measure.
+      if (broke) throw new Error(broke.error);
+      return record;
+    }
+    console.log(broke ? `    Ollama gave way during that run (${broke.error}); repeating it` : '    another model was loaded during that run; repeating it');
   }
 }
 

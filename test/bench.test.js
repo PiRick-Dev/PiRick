@@ -3,9 +3,10 @@ import { test } from 'node:test';
 
 // The agent warns each time it corrects a model, which the bad scripts make it do on purpose.
 process.env.LOG_LEVEL = 'error';
-const { search } = await import('../bench/corpus.js');
+const corpus = await import('../bench/corpus.js');
+const { search } = corpus;
 const { SCENARIOS, YES, play, stoppedAtQuestion } = await import('../bench/scenarios.js');
-const { createWorld, scripted } = await import('../bench/world.js');
+const { createWorld, scripted, talkTo } = await import('../bench/world.js');
 const { summarise } = await import('../bench/report.js');
 
 async function run(scenario, script) {
@@ -33,6 +34,36 @@ test('the stand-in indexer matches by words, as real ones do', () => {
   assert.equal(names('The Vampires S01', [5000]).length, 2);
   // Punctuation in a title does not matter.
   assert.equal(names('Dr. Jekyll & Mr. Hyde 1920').length, 4);
+});
+
+test('a program dressed up as a film or as a season reaches neither the model nor the planner', async () => {
+  const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
+  // The indexer has such an advert for a film, and it is its best-shared result.
+  assert.match(search('Metropolis 1927')[0].title, /\.exe$/);
+  for (const setup of [{}, { catalogue: true }]) {
+    const chat = talkTo(setup);
+    try {
+      const { outputs } = await chat.say('Get Metropolis', [call('search_media', { query: 'Metropolis 1927', media_type: 'movie' })], 'Which one?');
+      assert.equal(outputs[0].results.length, 5);
+      assert.ok(outputs[0].results.every((result) => !/\.exe$/.test(result.title)));
+    } finally {
+      chat.close();
+    }
+  }
+
+  // A show's seasons are picked by PiRick's own rules, which would have taken the best shared.
+  const advert = { ...corpus.byTitle('Copperhollow.S02.1080p.WEB-DL.DDP5.1.Atmos.H.264-GRP'), title: 'Copperhollow.S02.1080p.WEB-DL.FREE.PLAYER.REQUIRED.www.best-codec-pack.example.exe', seeders: 9000, size: 4_000_000, infoHash: 'a'.repeat(40) };
+  const withAdvert = { ...corpus, search: (query, categories) => [...(/copperhollow/i.test(query) ? [advert] : []), ...corpus.search(query, categories)] };
+  for (const setup of [{}, { catalogue: true }]) {
+    const chat = talkTo(setup, { corpus: withAdvert });
+    try {
+      const planned = (outputs) => call('download', { result_id: outputs.findLast((output) => output.plan).plan.id, library: 'TV', title: 'Copperhollow' });
+      await chat.say('Get season 2 of Copperhollow', [call('find_show', { title: 'Copperhollow', season: 2 }), planned], 'Done.');
+      assert.deepEqual(chat.world.trace().added.map((entry) => entry.title), ['Copperhollow.S02.1080p.WEB-DL.DDP5.1.Atmos.H.264-GRP']);
+    } finally {
+      chat.close();
+    }
+  }
 });
 
 test('scenario ids are unique', () => {
@@ -77,6 +108,81 @@ test('a model that checks first and then follows through passes, and is counted 
   const dithering = await run(scenario, [search, question, question]);
   assert.deepEqual(failed(dithering).slice(0, 1), ['the right film']);
   assert.equal(dithering.trace.turns[0].confirmations, 1, 'yes is said once');
+});
+
+test('what is said in a question the user says yes to counts as said', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'catalogue-missing-episodes');
+  const [find, download] = scenario.ideal;
+  const question = () => ({ role: 'assistant', content: 'Season 2 and the last two episodes of season 3 could not be found. Shall I get the rest?' });
+  const done = () => ({ role: 'assistant', content: 'I picked Wrenfield Cross and saved it in TV. It will show up in Plex as it finishes.' });
+  assert.deepEqual(failed(await run(scenario, [find, question, download, done])), []);
+  // Said nowhere, it is still missing.
+  assert.deepEqual(failed(await run(scenario, [find, download, done])), ['said season 2 is missing', 'said which episodes are missing']);
+});
+
+test('the usual ways of saying that part of a show has not aired are recognised', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'catalogue-still-running');
+  const [find, download] = scenario.ideal;
+  const saying = (rest) => run(scenario, [find, download, () => ({ role: 'assistant', content: `I picked Tales of the Kestrel and saved it in TV. ${rest}` })]);
+  for (const rest of ["Some episodes in the third season haven't aired yet.", 'Season 3 is still airing.', 'The last five episodes have not been shown yet.']) {
+    assert.deepEqual(failed(await saying(rest)), [], rest);
+  }
+  assert.deepEqual(failed(await saying('It will show up in Plex as it finishes.')), ['said the rest has not aired yet']);
+});
+
+test('one look is one call, however many searches PiRick makes of it', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'catalogue-nothing-there');
+  const sorry = () => ({ role: 'assistant', content: "Sorry, I couldn't find The Zorblax Chronicles anywhere." });
+  const look = (name, args) => () => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
+  // Looking for a show searches for its seasons and for the whole of it, which is still one look.
+  assert.deepEqual(failed(await run(scenario, [look('find_show', { title: 'The Zorblax Chronicles 2019' }), sorry])), []);
+  const twice = [look('search_media', { query: 'The Zorblax Chronicles 2019', media_type: 'movie' }), look('search_media', { query: 'Zorblax', media_type: 'movie' }), sorry];
+  assert.deepEqual(failed(await run(scenario, twice)), ['gave up after one look']);
+  // Asking for the film and the show at once, before either has answered, is one look as well.
+  const both = () => ({ role: 'assistant', content: '', tool_calls: [look('search_media', { query: 'The Zorblax Chronicles 2019', media_type: 'any' })().tool_calls[0], look('find_show', { title: 'The Zorblax Chronicles' })().tool_calls[0]] });
+  assert.deepEqual(failed(await run(scenario, [both, sorry])), []);
+});
+
+test('asked what is meant before anything is looked up, the user says, and what follows is judged', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'question-popular');
+  const [suggest, list] = scenario.ideal;
+  const which = () => ({ role: 'assistant', content: 'Are you looking for films or TV shows?' });
+  const result = await run(scenario, [which, suggest, list]);
+  assert.deepEqual(failed(result), []);
+  assert.equal(result.trace.turns[0].answered, 'Films, please.');
+  // Left at the question, a saved run counts as unfinished and is played again.
+  assert.equal(stoppedAtQuestion(scenario, { turns: [{ reply: which().content, calls: [], confirmations: 0 }] }), true);
+  // A question that follows the list is an offer, and nobody answers it.
+  const offer = () => ({ role: 'assistant', content: `${list().content}\n\nShall I get one of these?` });
+  const offered = await run(scenario, [suggest, offer]);
+  assert.deepEqual(failed(offered), []);
+  assert.equal(offered.trace.turns[0].confirmations, 0);
+  // Asking twice is not answering.
+  assert.deepEqual(failed(await run(scenario, [which, which])), ['named what the catalogue lists']);
+});
+
+test('a reply is read as a person reads it: odd spaces are spaces, and an offer need not be a question', async () => {
+  const missing = SCENARIOS.find((entry) => entry.id === 'catalogue-missing-episodes');
+  const [find, download] = missing.ideal;
+  // Some models put a narrow unbreakable space in "Season 2" and an unbreakable hyphen in "7-8".
+  const narrow = 'I picked Wrenfield Cross and saved it in TV. Season 2 and episodes 7‑8 of Season 3 are not available.';
+  assert.deepEqual(failed(await run(missing, [find, download, () => ({ role: 'assistant', content: narrow })])), []);
+
+  const asked = SCENARIOS.find((entry) => entry.id === 'question-do-we-have-it-no');
+  const [lookUp, , ...get] = asked.ideal;
+  const saying = (reply) => run(asked, [lookUp, () => ({ role: 'assistant', content: reply }), ...get]);
+  assert.deepEqual(failed(await saying("No, it is not in Plex. If you'd like me to get it, just let me know!")), []);
+  assert.deepEqual(failed(await saying('No, The Cabinet of Dr. Caligari is not in Plex.')), ['offered to get it']);
+});
+
+test('offering a reminder about a film that is not out is a promise PiRick cannot keep', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'catalogue-not-out');
+  const [search] = scenario.ideal;
+  const saying = (reply) => run(scenario, [search, () => ({ role: 'assistant', content: reply })]);
+  for (const reply of ['It is not out yet: it is due on 6 December. Would you like me to remind you when it becomes available?', "It hasn't been released yet. I'll let you know when it is!"]) {
+    assert.deepEqual(failed(await saying(reply)), ['did not offer a reminder'], reply);
+  }
+  assert.deepEqual(failed(await saying('It is not out yet: it is due on 6 December. Ask me again then and I will get it.')), []);
 });
 
 test('a question about folders, asked after trying to download, is answered too', async () => {
