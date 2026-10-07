@@ -43,7 +43,7 @@ function explain(err, user) {
   return user.role === 'admin' ? `${friendly} (${describeError(err)})` : friendly;
 }
 
-export function createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit, plex }) {
+export function createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit, plex, catalogue }) {
   const app = express();
   const attempts = createRateLimiter({ windowMs: ATTEMPT_WINDOW_MS });
   const busy = new Set();
@@ -304,8 +304,10 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     };
     // Plex is optional: left out of .env, it is reported as switched off, not as broken.
     const plexProbe = plex.enabled ? probe(plex) : { off: true, detail: 'Not connected. Set PLEX_URL and PLEX_TOKEN to connect it.' };
-    const [ollamaStatus, jackettStatus, qbitStatus, plexStatus] = await Promise.all([probe(ollama), probe(jackett), probe(qbit), plexProbe]);
-    res.json({ ollama: ollamaStatus, jackett: jackettStatus, qbittorrent: qbitStatus, plex: plexStatus });
+    // So is the catalogue.
+    const catalogueProbe = catalogue?.enabled ? probe(catalogue) : { off: true, detail: 'Switched off. Set CATALOGUE=on to use it.' };
+    const [ollamaStatus, jackettStatus, qbitStatus, plexStatus, catalogueStatus] = await Promise.all([probe(ollama), probe(jackett), probe(qbit), plexProbe, catalogueProbe]);
+    res.json({ ollama: ollamaStatus, jackett: jackettStatus, qbittorrent: qbitStatus, plex: plexStatus, catalogue: catalogueStatus });
   });
 
   // Which build of PiRick this is: `{ commit, builtAt }`, both empty unless it runs from the published image.

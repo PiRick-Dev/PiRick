@@ -2267,6 +2267,11 @@ progress {
   border-left-color: var(--danger);
 }
 
+/* Links in a note, such as the credit for where the catalogue's facts come from, keep the note's colour and their underline. */
+.muted a {
+  color: inherit;
+}
+
 .user-row {
   display: flex;
   flex-wrap: wrap;

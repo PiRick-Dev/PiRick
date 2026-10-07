@@ -958,6 +958,8 @@ test('admins manage people; members cannot manage anything', async () => {
     qbittorrent: { ok: true, detail: 'qBittorrent v5.2.4' },
     // Left out of the settings, Plex is reported as switched off, not as a fault.
     plex: { off: true, detail: 'Not connected. Set PLEX_URL and PLEX_TOKEN to connect it.' },
+    // And so is the catalogue.
+    catalogue: { off: true, detail: 'Switched off. Set CATALOGUE=on to use it.' },
   });
 
   const weak = await request('/api/admin/users', { method: 'POST', body: { username: 'sam', password: 'short' } });

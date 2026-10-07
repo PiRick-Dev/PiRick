@@ -127,6 +127,15 @@ export function loadConfig(env = process.env) {
       token: text(env, 'PLEX_TOKEN'),
       timeoutMs: 15_000,
     },
+    // Off leaves PiRick without a catalogue, which is how it ran before it had one.
+    catalogue: {
+      enabled: oneOf(env, 'CATALOGUE', 'off', ['on', 'off']) === 'on',
+      wikidata: 'https://www.wikidata.org/w/api.php',
+      tvmaze: 'https://api.tvmaze.com',
+      wikipedia: 'https://en.wikipedia.org/api/rest_v1',
+      pageviews: 'https://wikimedia.org/api/rest_v1',
+      timeoutMs: 10_000,
+    },
     build: build(env),
     searchLimit: integer(env, 'SEARCH_RESULT_LIMIT', 15, 3, 50),
     maxTorrentBytes: integer(env, 'MAX_TORRENT_SIZE_GB', 0, 0, 100000) * 1024 ** 3,

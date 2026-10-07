@@ -1,5 +1,6 @@
 import { createAgent } from './agent.js';
 import { createAuth } from './auth.js';
+import { createCatalogue } from './catalogue.js';
 import { createConversation } from './conversation.js';
 import { openDb } from './db.js';
 import { createJackett } from './jackett.js';
@@ -19,11 +20,12 @@ export function build(config) {
   const jackett = createJackett(config.jackett);
   const qbit = createQbittorrent(config.qbit);
   const plex = createPlex(config.plex);
+  const catalogue = createCatalogue(config.catalogue);
   const conversation = createConversation(db);
   const settings = createSettings(db);
   const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex });
-  const tools = createTools({ config, jackett, qbit, settings, upkeep, plex });
-  const agent = createAgent({ ollama, tools, conversation, settings, upkeep, plex });
-  const app = createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit, plex });
-  return { app, auth, db, settings, upkeep };
+  const tools = createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue });
+  const agent = createAgent({ ollama, tools, conversation, settings, upkeep, plex, catalogue });
+  const app = createApp({ config, auth, agent, conversation, tools, settings, upkeep, ollama, jackett, qbit, plex, catalogue });
+  return { app, auth, db, settings, upkeep, catalogue };
 }

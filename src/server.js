@@ -36,7 +36,7 @@ async function ensureAdmin(auth, config) {
 
 async function main() {
   const config = loadConfig();
-  const { app, auth, db, settings, upkeep } = build(config);
+  const { app, auth, db, settings, upkeep, catalogue } = build(config);
   await ensureAdmin(auth, config);
 
   if (!config.jackett.apiKey) log.warn('JACKETT_API_KEY is not set: searches will fail until it is');
@@ -61,6 +61,7 @@ async function main() {
       port: config.port,
       model: config.ollama.model,
       plex: Boolean(config.plex.url && config.plex.token),
+      catalogue: catalogue.enabled,
       build: config.build.commit.slice(0, 7) || 'not a published build',
     });
   });

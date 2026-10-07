@@ -452,6 +452,7 @@ const SERVICES = [
   ['jackett', 'Jackett (search)'],
   ['qbittorrent', 'qBittorrent (downloads)'],
   ['plex', 'Plex (your library)'],
+  ['catalogue', 'Catalogue (films and shows)'],
 ];
 // A service that is switched off is neither working nor broken.
 const statusTone = (status) => (status.off ? '' : status.ok ? 'ok' : 'bad');
@@ -464,6 +465,8 @@ async function loadStatus() {
     list.replaceChildren(
       ...SERVICES.map(([key, label]) => h('li', { class: statusTone(status[key]) }, h('strong', {}, label), h('span', {}, status[key].detail))),
     );
+    // The catalogue's sources ask to be credited wherever they are in use.
+    $('#catalogue-credit').hidden = Boolean(status.catalogue.off);
   } catch (err) {
     list.replaceChildren(h('li', { class: 'bad' }, err.message));
   }
