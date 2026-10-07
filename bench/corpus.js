@@ -157,6 +157,8 @@ export const RELEASES = [
   release('Tales.of.the.Kestrel.S01.1080p.WEB-DL.DDP5.1.Atmos.H.264-GRP', 700, 32, TV),
   release('Tales.of.the.Kestrel.S01.2160p.WEB-DL.HDR.H.265-GRP', 200, 74, TV),
   release('Tales.of.the.Kestrel.S02.1080p.WEB-DL.DDP5.1.Atmos.H.264-GRP', 650, 27, TV),
+  // Season 3 is still being shown: three episodes so far, and no pack of it yet.
+  ...episodes('Tales.of.the.Kestrel', 3, 3, '1080p.WEB.H264-GRP', 400, 2.1),
   release('Tales.of.Ossendale.S01.1080p.BluRay.x264-GRP', 150, 42, TV),
 
   // A serial from 1915, known in French as "Les Vampires".

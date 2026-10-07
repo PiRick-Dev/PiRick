@@ -8,47 +8,14 @@ process.env.LOG_LEVEL = 'error';
 const { sayDate } = await import('../src/catalogue.js');
 const { splitQuery } = await import('../src/search.js');
 const { filmLine, neighbours, whenDue } = await import('../src/lookups.js');
-const { createWorld } = await import('../bench/world.js');
+const { talkTo } = await import('../bench/world.js');
 
 const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
 const film = (query, more = {}) => call('search_media', { query, media_type: 'movie', ...more });
 const firstId = (outputs) => outputs.findLast((output) => output.results?.length).results[0].id;
 
-/**
- * A PiRick to talk to. `say(text, calls, reply)` is one message from the user,
- * which the model answers with these tool calls in order and then with `reply`.
- * A call may be a function of the tool outputs so far in that message. Resolves
- * to those outputs in full, the record of the request, and the prompt the model had.
- */
-function pirick(setup = { catalogue: true }) {
-  const queue = [];
-  let seen = [];
-  let offered = [];
-  const outputsSince = (text) => seen.slice(seen.findLastIndex((message) => message.role === 'user' && message.content === text)).filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
-  let asked = '';
-  const world = createWorld(setup, () => ({
-    async chat({ messages, tools, onDelta }) {
-      seen = messages;
-      offered = tools ?? offered;
-      const step = queue.shift();
-      if (!step) throw new Error('The script ran out of replies');
-      const reply = structuredClone(typeof step === 'function' ? step(outputsSince(asked)) : step);
-      if (reply.content) onDelta?.(reply.content);
-      return reply;
-    },
-  }));
-  return {
-    world,
-    async say(text, calls, reply) {
-      asked = text;
-      queue.push(...calls, { role: 'assistant', content: reply });
-      const record = await world.say(text);
-      assert.equal(queue.length, 0, 'every scripted reply was used');
-      return { record, outputs: outputsSince(text), prompt: seen[0].content, tools: offered };
-    },
-    close: () => world.close(),
-  };
-}
+/** A PiRick with the catalogue on, to talk to with a scripted model: see talkTo. */
+const pirick = (setup = { catalogue: true }) => talkTo(setup);
 
 test('what a search for a film is made of', () => {
   assert.deepEqual(splitQuery('Charade 1965'), { title: 'Charade', year: 1965, copy: [], episodes: false });

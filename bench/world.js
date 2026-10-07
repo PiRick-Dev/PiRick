@@ -258,6 +258,48 @@ export function createWorld(setup = {}, connect, using = {}) {
 }
 
 /**
+ * A world to talk to with a model whose replies are scripted as the talk goes,
+ * for tests. `say(text, calls, reply)` is one message from the user, which the
+ * model answers with these tool calls in order and then with `reply` in words.
+ * A call may be a function of the tool outputs so far in that message. Resolves
+ * to those outputs in full, the record of the request, and the prompt and tools
+ * the model was given.
+ */
+export function talkTo(setup = {}, using = {}) {
+  const queue = [];
+  let seen = [];
+  let offered = [];
+  let asked = '';
+  const outputs = () => seen.slice(seen.findLastIndex((message) => message.role === 'user' && message.content === asked)).filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+  const world = createWorld(
+    setup,
+    () => ({
+      async chat({ messages, tools, onDelta }) {
+        seen = messages;
+        offered = tools ?? offered;
+        const step = queue.shift();
+        if (!step) throw new Error('The script ran out of replies');
+        const reply = structuredClone(typeof step === 'function' ? step(outputs()) : step);
+        if (reply.content) onDelta?.(reply.content);
+        return reply;
+      },
+    }),
+    using,
+  );
+  return {
+    world,
+    async say(text, calls, reply) {
+      asked = text;
+      queue.push(...calls, { role: 'assistant', content: reply });
+      const record = await world.say(text);
+      if (queue.length) throw new Error(`${queue.length} scripted repl${queue.length === 1 ? 'y was' : 'ies were'} not used`);
+      return { record, outputs: outputs(), prompt: seen[0].content, tools: offered };
+    },
+    close: () => world.close(),
+  };
+}
+
+/**
  * A model that follows a script, for testing scenarios without a real one.
  * Each step is a reply, or a function of the messages so far that returns one.
  */

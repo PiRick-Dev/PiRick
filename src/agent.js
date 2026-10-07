@@ -54,9 +54,10 @@ const PLEX_RULES = `
 
 // Only said when PiRick has a catalogue to go by; without one the prompt is as it always was.
 const CATALOGUE_RULES = `
-- PiRick has a catalogue of the films and shows that exist. search_media says what it knows under "catalogue": which film is meant, its proper title and year, who made it and what it follows. Go by that, not by your own memory, and use its title and year when you tell the user what you picked.
-- When it says several films share a name, nothing has been searched for yet. If what the user said settles which one (a year, a director, an actor), call search_media again with that title and its year. Otherwise ask the user which one they mean.
-- When it says a film is not out yet, or that nothing of that name exists and nothing was found, tell the user so. Do not search again under other spellings.`;
+- PiRick has a catalogue of the films and shows that exist. search_media and find_show say what it knows under "catalogue": which film or show is meant, its proper title and year, who made it, how many seasons there are and what has aired. Go by that, not by your own memory, and use its title and year when you tell the user what you picked.
+- When it says several films or shows share a name, nothing has been searched for yet. If what the user said settles which one (a year, a director, an actor, a country), call the same tool again with that title and its year. Otherwise ask the user which one they mean.
+- When it says something is not out yet, has not aired or does not exist, or that nothing of that name exists and nothing was found, tell the user so. Do not search again under other spellings.
+- For the latest or newest season of a show, call find_show with latest set to true. Do not work out the season number yourself.`;
 
 function systemPrompt(user, libraries, personality, plexConnected, catalogueConnected) {
   return `You are PiRick, an assistant that finds and downloads movies, TV shows, anime, music and books for a home Plex server. You are talking to ${user.username}. Today is ${new Date().toDateString()}.

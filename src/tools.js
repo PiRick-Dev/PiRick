@@ -1,12 +1,12 @@
 import { randomInt } from 'node:crypto';
-import { standing } from './catalogue.js';
+import { sayDate, standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
 import { log } from './log.js';
-import { filmLine, listOf, neighbours, titled, whenDue } from './lookups.js';
+import { filmLine, guideOf, heldAgainst, listOf, neighbours, numbered, showLine, titled, whenDue } from './lookups.js';
 import { BASE_TAG, formatBytes, userTag } from './qbittorrent.js';
-import { describeContents, describePart, parseRelease, parseWanted, planShow } from './releases.js';
+import { describeContents, describePart, lastAired, parseRelease, parseWanted, planShow } from './releases.js';
 import { createFinder, splitQuery } from './search.js';
 import { infoHashOf } from './torrentfile.js';
 
@@ -37,6 +37,8 @@ const MAX_PLEX_LOOKUPS = 4;
 // How long "you already have this" stays said. Past that, PiRick says it again before fetching another copy.
 const PLEX_ANSWER_MS = 30 * 60 * 1000;
 const MAX_PLEX_TOLD = 500;
+// How release names mark which of two same-named shows they are: "Kestrelmere.US.S01", "Kestrelmere.UK.S01".
+const COUNTRY_TAGS = { US: ['US', 'USA'], GB: ['UK', 'GB'] };
 // No 0/o, 1/l/i: ids are copied by a language model and read by people.
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 
@@ -99,6 +101,21 @@ const FIND_SHOW_DEFINITION = {
         },
       },
       required: ['title'],
+    },
+  },
+};
+
+// With a catalogue, which season is the latest is for PiRick to work out, not the model.
+const FIND_SHOW_WITH_CATALOGUE = {
+  ...FIND_SHOW_DEFINITION,
+  function: {
+    ...FIND_SHOW_DEFINITION.function,
+    parameters: {
+      ...FIND_SHOW_DEFINITION.function.parameters,
+      properties: {
+        ...FIND_SHOW_DEFINITION.function.parameters.properties,
+        latest: { type: 'boolean', description: 'Set to true when the user asks for the latest or newest season without saying its number, and leave season out.' },
+      },
     },
   },
 };
@@ -417,6 +434,86 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     return { film, searchFor: [film.title, film.year, ...asked.copy].filter(Boolean).join(' '), says };
   }
 
+  /**
+   * What the catalogue makes of a request for a show. Resolves to one of:
+   *   undefined          nothing: the catalogue is off or cannot be asked
+   *   { output }         the whole answer, with no need to search: several shows share the name, it is a
+   *                      film, or what was asked for does not exist or has not aired
+   *   { show, guide, season, says }   which show it is, its episode guide (null when there is none to go
+   *                      by), the season meant when the latest was asked for, and what to tell the model
+   *   { says, unknown }  it knows no such show, and the search goes ahead as asked
+   */
+  async function showAsked(user, turn, asked, { season, episode, latest }) {
+    if (!catalogue?.enabled) return undefined;
+    const wanted = parseWanted(asked);
+    const found = await askCatalogue(() => catalogue.findShow({ title: wanted.name, year: wanted.year }));
+    if (!found) return undefined;
+    const named = `“${wanted.name}”`;
+
+    if (found.none) {
+      const film = await askCatalogue(() => catalogue.findFilm({ title: wanted.name, year: wanted.year }));
+      const exact = film && !film.none && !film.inexact ? (film.one ?? film.several[0]) : null;
+      if (!exact) return { says: [`The catalogue knows no show called ${named}.`], unknown: true };
+      turn.status(`Looked up ${named}: it is a film`, 'search');
+      return { output: { found: false, catalogue: `The catalogue lists ${titled(exact)} as a film, not a TV show.`, note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' } };
+    }
+    const wrongYear = found.wrongYear ? `No show called ${named} began in ${wanted.year}.` : '';
+    if (found.several) {
+      turn.status(`Looked up ${named}: ${found.several.length} shows share that name`, 'search');
+      return {
+        output: {
+          found: false,
+          catalogue: [wrongYear, `${found.inexact ? 'These shows have names like' : 'More than one show is called'} ${named}.`].filter(Boolean).join(' '),
+          which_one: found.several.map((show) => showLine(show, { about: true })),
+          note: 'Nothing was looked for yet. If what the user said settles which of these they mean (a year, a country), call find_show again with that year added to the title. Otherwise ask the user which one, giving the years and countries.',
+        },
+      };
+    }
+
+    const show = found.one;
+    const says = [];
+    if (wrongYear) says.push(`${wrongYear} The show of that name is ${showLine(show)}, and that is what was looked for.`);
+    else if (found.inexact) says.push(`Nothing is called ${named}. The nearest is ${showLine(show)}, and that is what was looked for.`);
+    else says.push(`This is ${showLine(show)}.`);
+    if (found.others) says.push(`${found.others === 1 ? 'One lesser-known show has' : `${found.others} lesser-known shows have`} the same name.`);
+    if (wrongYear || found.inexact) turn.status(`Took ${named}${wanted.year ? ` (${wanted.year})` : ''} to be ${titled(show)}`, 'info');
+
+    const guide = guideOf(show);
+    if (!guide) return { show, guide: null, says };
+    const next = show.next?.date ? ` It is due on ${sayDate(show.next.date)}.` : '';
+    /** There is nothing to look for, and saying why is a complete answer. */
+    const nothing = (why, note) => {
+      turn.known = true;
+      turn.status(`Not looked for: ${why}`, 'info');
+      return { output: { found: false, catalogue: `${says.join(' ')} ${why}`, note: `Nothing was looked for. ${note}` } };
+    };
+    const last = lastAired(guide);
+    if (!last) return nothing(`None of ${show.title} has aired yet.${next}`, 'Tell the user it has not started yet, and when it does if that is known.');
+    const over = show.status === 'ended' || show.status === 'cancelled';
+    const meant = latest ? last : season;
+    if (meant && !guide.has(meant)) {
+      return nothing(`${show.title} has ${guide.size} season${guide.size === 1 ? '' : 's'}${over ? '' : ' so far'}. There is no season ${meant}.`, 'Tell the user how many seasons there are, and ask which they would like.');
+    }
+    if (meant && !guide.get(meant).aired) {
+      const begins = guide.get(meant).date ? ` It begins on ${sayDate(guide.get(meant).date)}.` : '';
+      return nothing(`Season ${meant} of ${show.title} has not started yet.${begins}`, 'Tell the user it has not started yet, and when it does if that is known.');
+    }
+    if (episode) {
+      const number = meant ?? 1;
+      const of = guide.get(number);
+      if (of && episode > of.aired) {
+        // A season that is over has all the episodes it will ever have.
+        if (of.aired === of.episodes && (over || number < last)) {
+          return nothing(`Season ${number} of ${show.title} has ${episodeCount(of.episodes)}. There is no episode ${episode}.`, 'Tell the user how many episodes the season has.');
+        }
+        const due = show.next?.season === number && show.next.episode === episode ? next : '';
+        return nothing(`Only ${episodeCount(of.aired)} of season ${number} of ${show.title} ${of.aired === 1 ? 'has' : 'have'} aired so far.${due}`, 'Tell the user that episode has not aired yet, and when it is due if that is known.');
+      }
+    }
+    if (show.next?.date) says.push(`The next episode, season ${show.next.season} episode ${show.next.episode}, is due on ${sayDate(show.next.date)}.`);
+    return { show, guide, season: latest ? last : undefined, says };
+  }
+
   // Searches can take a while behind a Cloudflare solver, so each one is announced.
   const announce = (turn) => (spelling) => turn.emit({ type: 'working', text: `Searching for “${spelling}”…` });
 
@@ -428,12 +525,14 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
    * or `{ reply }` when the model has to be told something instead.
    *
    * `folders` is what qBittorrent says is inside the library folder, or null
-   * when it could not say. `name` is the release or show being saved.
+   * when it could not say. `name` is the release or show being saved. `known`
+   * is what the catalogue said it is, `{ title, year, names }`, when it did:
+   * the folder is then named by the catalogue, not by the model.
    */
-  function destination(library, folders, name, args, turn, id) {
+  function destination(library, folders, name, args, turn, id, known) {
     if (!library.perTitle) return { savePath: library.savePath, label: library.name };
 
-    const title = cleanFolderName(args.title) || titleFromRelease(name);
+    const title = (known && cleanFolderName(known.title)) || cleanFolderName(args.title) || titleFromRelease(name);
     if (!title) {
       return { reply: { ok: false, error: `${library.name} keeps each show in its own folder. Call download again with title set to the name of the show.` } };
     }
@@ -441,7 +540,17 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     // Only claim the folder is new when qBittorrent confirmed it is not there.
     let created = Boolean(folders);
     if (folders) {
-      const found = findFolder(title, folders);
+      let found = findFolder(title, folders);
+      if (known && !found.match) {
+        // The catalogue knows the show's other names, so a folder under one of them is this show's.
+        const under = known.names.map((other) => findFolder(other, folders).match).find(Boolean);
+        // Folders that share its name are told apart by the year in theirs.
+        const namesakes = (found.similar ?? []).filter((folder) => titleKey(folder) === titleKey(title));
+        const dated = namesakes.find((folder) => known.year && folder.includes(String(known.year)));
+        if (under ?? dated) found = { match: under ?? dated };
+        // A folder that only looks similar is another show: the catalogue would have known the name.
+        else if (!namesakes.length) found = {};
+      }
       if (found.match) {
         // Reuse the folder that is already there, with its own spelling and capitals.
         folder = found.match;
@@ -469,7 +578,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
    * Checks the library's folder and works out the destination. Returns
    * `{ savePath, label }`, or `{ reply }` to hand straight back to the model.
    */
-  async function place(user, library, name, args, turn, id) {
+  async function place(user, library, name, args, turn, id, known) {
     const listing = await qbit.listFolders(library.savePath);
     if (listing && !listing.exists) {
       // Saving here would make qBittorrent create the folder, which is how a
@@ -497,7 +606,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         .map(({ name: folder }) => folder);
       if (pending.length) folders = [...new Set([...(folders ?? []), ...pending])];
     }
-    return destination(library, folders, name, args, turn, id);
+    return destination(library, folders, name, args, turn, id, known);
   }
 
   /**
@@ -535,7 +644,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
 
   /** Downloads every release in a find_show plan into one place. */
   async function downloadPlan(user, entry, library, args, turn, id) {
-    const spot = await place(user, library, entry.show, args, turn, id);
+    const spot = await place(user, library, entry.show, args, turn, id, entry.known);
     if (spot.reply) return spot.reply;
     const target = { category: library.category, savePath: spot.savePath, tags: [BASE_TAG, userTag(user.username)] };
     const total = entry.parts.reduce((sum, part) => sum + part.releases.length, 0);
@@ -642,7 +751,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         const film = filmOf(contents[i]);
         if (film) tellInPlex(user, turn, `film ${film.id}`);
         return {
-          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, names: known.film.names } }) }),
+          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, year: known.film.year, names: known.film.names } }) }),
           title: result.title,
           kind: kindOf(result.categories),
           contains: describeContents(contents[i]),
@@ -709,31 +818,58 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     },
 
     async find_show(user, args, turn) {
-      const title = String(args.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
-      if (!title) return { error: 'A title is required.' };
+      const asked = String(args.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!asked) return { error: 'A title is required.' };
       const whole = (value) => (Number.isInteger(Number(value)) && Number(value) > 0 ? Number(value) : null);
-      const season = whole(args.season);
+      let season = whole(args.season);
       const episode = whole(args.episode);
       const quality = Number.parseInt(args.quality, 10) || 1080;
-      const scope = episode ? (season ? `season ${season} episode ${episode} of ` : `episode ${episode} of `) : season ? `season ${season} of ` : '';
-      const what = `${scope}“${title}”`;
+      // Only a catalogue can say which season is the latest.
+      const latest = Boolean(catalogue?.enabled) && args.latest === true && !season && !episode;
 
       turn.searched = true;
-      const searchKey = `show|${title.toLowerCase()}|${season}|${episode}|${quality}`;
+      const searchKey = `show|${asked.toLowerCase()}|${season}|${episode}|${quality}${latest ? '|latest' : ''}`;
       if (turn.searches.has(searchKey)) {
         return { ...turn.searches.get(searchKey), note: 'You already looked this up in this turn. Call download with the plan id, or answer the user.' };
       }
+
+      // What the catalogue makes of it, when there is one: which show is meant and what there is of it.
+      const known = await showAsked(user, turn, asked, { season, episode, latest });
+      if (known?.output) {
+        turn.searches.set(searchKey, known.output);
+        return known.output;
+      }
+      const listed = known?.show;
+      const guide = known?.guide ?? null;
+      if (known?.season) season = known.season;
+      const catalogueSays = known?.says?.length ? { catalogue: known.says.join(' ') } : {};
+      // A show the catalogue has named is looked for, and spoken of, under its proper name.
+      const title = listed ? listed.title : asked;
+      const scope = episode ? (season ? `season ${season} episode ${episode} of ` : `episode ${episode} of `) : season ? `season ${season} of ` : '';
+      const what = `${scope}“${title}”`;
       turn.emit({ type: 'working', text: `Looking for the best way to get ${what}…` });
 
       // What Plex has of this show: undefined when it was not asked, null when it has none.
       const wanted = parseWanted(title);
-      const inPlex = await askPlex(() => plex.show(wanted.name, wanted.year));
+      const inPlex = await askPlex(async () => {
+        if (!listed) return plex.show(wanted.name, wanted.year);
+        // Plex may have it filed under another of its names.
+        for (const name of listed.names.slice(0, MAX_PLEX_LOOKUPS)) {
+          const under = await plex.show(name, listed.year);
+          if (under) return under;
+        }
+        return null;
+      });
       const held = inPlex?.seasons ?? new Map();
       const heldKey = (part) => `show ${titleKey(inPlex.title)} ${part}`;
       const allOfIt = !season && !episode;
+      // With an episode guide, the aired episodes of a season that Plex lacks are known. Null without one.
+      const lacking = (number) => (guide?.has(number) ? Array.from({ length: guide.get(number).aired }, (unused, i) => i + 1).filter((part) => !held.get(number)?.has(part)) : null);
       let plexSays;
       // Set when the plan would fetch something Plex has, so download asks first.
       let askFirst;
+      // Set when Plex has part of the one season asked for and the guide says which part, so only the rest is fetched.
+      let theRest = false;
       if (inPlex === null) plexSays = 'Plex has none of this show.';
       else if (inPlex && episode) {
         const key = heldKey(`s${season ?? 1}e${episode}`);
@@ -743,6 +879,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           turn.status(`Already in Plex: ${what}`, 'info');
           const output = {
             found: true,
+            ...catalogueSays,
             plex: `Plex already has ${scope}${inPlex.title}.`,
             note: 'Nothing needs downloading: the user already has this episode in Plex. Tell them so. Only if they then say they want another copy, call find_show again.',
           };
@@ -751,15 +888,37 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         } else plexSays = 'Plex already has this episode, and the user has been told.';
       } else if (inPlex && season) {
         const count = held.get(season)?.size ?? 0;
-        plexSays = count ? `Plex already has ${episodeCount(count)} of season ${season}.` : `Plex has none of season ${season}.`;
-        if (count && !answeredAboutPlex(user, turn, heldKey(`s${season}`))) {
-          askFirst = { key: heldKey(`s${season}`), label: `${episodeCount(count)} of season ${season} of ${inPlex.title}` };
+        const missing = lacking(season);
+        if (count && missing && !missing.length) {
+          // Every episode that has aired is there.
+          const key = heldKey(`s${season}`);
+          if (!answeredAboutPlex(user, turn, key)) {
+            tellInPlex(user, turn, key);
+            turn.status(`Already in Plex: ${what}`, 'info');
+            const output = {
+              found: true,
+              ...catalogueSays,
+              plex: `Plex already has all ${episodeCount(guide.get(season).aired)} of season ${season} of ${inPlex.title}.`,
+              note: 'Nothing needs downloading: the user already has the whole season in Plex. Tell them so. Only if they then say they want another copy, call find_show again.',
+            };
+            turn.searches.set(searchKey, output);
+            return output;
+          }
+          plexSays = `Plex already has all of season ${season}, and the user has been told.`;
+        } else if (count && missing) {
+          theRest = true;
+          plexSays = `Plex already has ${count} of the ${episodeCount(guide.get(season).aired)} of season ${season}. This plan gets only the ${missing.length === 1 ? 'one' : missing.length} it lacks: episode${missing.length === 1 ? '' : 's'} ${numbered(missing)}.`;
+        } else {
+          plexSays = count ? `Plex already has ${episodeCount(count)} of season ${season}.` : `Plex has none of season ${season}.`;
+          if (count && !answeredAboutPlex(user, turn, heldKey(`s${season}`))) {
+            askFirst = { key: heldKey(`s${season}`), label: `${episodeCount(count)} of season ${season} of ${inPlex.title}` };
+          }
         }
       } else if (inPlex) {
-        plexSays = held.size ? `Plex already has ${seasonsHeld(held)}.` : 'Plex has none of this show.';
+        plexSays = !held.size ? 'Plex has none of this show.' : guide ? `Plex already has ${heldAgainst(held, guide)}.` : `Plex already has ${seasonsHeld(held)}.`;
       }
-      // For a whole show, what Plex has is left out. It cannot tell whether a season
-      // is complete, so a season with anything in it is not fetched again as a pack,
+      // For a whole show, what Plex has is left out. Without a guide it cannot be told whether a
+      // season is complete, so a season with anything in it is not fetched again as a pack,
       // while single episodes it lacks still are.
       const has = (number, part) => Boolean(held.get(number)?.has(part));
       const skip = ({ parsed }) => {
@@ -767,76 +926,131 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         if (parsed.kind === 'season' || parsed.kind === 'seasons') return parsed.seasons.some((number) => held.has(number));
         return parsed.kind === 'series';
       };
-      // Seasons before the last one Plex has are taken to be complete, and not searched for.
+      // Seasons that need no looking for: with a guide, those Plex has every aired episode of;
+      // without one, those before the last it has, which are taken to be complete.
       const lastHeld = Math.max(0, ...held.keys());
-      const settled = new Set([...held.keys()].filter((number) => number < lastHeld));
-      const leaveOut = allOfIt && held.size > 0;
+      const settled = new Set([...held.keys()].filter((number) => (guide ? lacking(number)?.length === 0 : number < lastHeld)));
+      const leaveOut = (allOfIt && held.size > 0) || theRest;
 
-      const options = { title, season, episode, quality, maxBytes: config.maxTorrentBytes, atOnce: config.jackett.searchesAtOnce, ...(leaveOut && { skip, settled, inParts: true }) };
+      // The show's other names, and its name with its country after it, which is how releases tell namesakes apart.
+      const names = listed ? [...listed.names, ...listed.countries.flatMap((code) => COUNTRY_TAGS[code] ?? [code]).map((tag) => `${listed.title} ${tag}`)] : [];
+      const options = {
+        title,
+        season,
+        episode,
+        quality,
+        maxBytes: config.maxTorrentBytes,
+        atOnce: config.jackett.searchesAtOnce,
+        ...(leaveOut && { skip, settled, inParts: true }),
+        ...(listed && { names, year: listed.year, guide }),
+      };
       let found;
       try {
         // planShow decides for itself which releases are this show, so only the other spellings are wanted here.
         const search = async (query) => (await finder.search(query, TORZNAB_CATEGORIES.tv, { filter: false, onTry: announce(turn) })).results;
         found = await planShow(search, options);
+        // Nothing under its usual name: it may be released under another.
+        for (const other of listed && !found.plan?.torrents ? listed.names.filter((name) => titleKey(name) !== titleKey(title)).slice(0, 2) : []) {
+          found = await planShow(search, { ...options, title: other });
+          if (found.plan?.torrents) break;
+        }
       } catch (err) {
         log.warn('show search failed', { user: user.username, title, error: describeError(err) });
         turn.status(`The search for ${what} failed${detail(user, err)}`, 'error');
         return { error: 'The search service is not working right now. Tell the user to try again later or let the admin know.' };
       }
+      // The catalogue has said which show this is, so releases with similar names are not it.
+      if (listed && !found.plan) found = { plan: { parts: [], missing: [], torrents: 0 }, show: title };
 
       let output;
       if (found.others) {
         turn.status(`Looked for ${what}: several different shows match`, 'search');
-        output = { found: false, different_shows: found.others, note: 'Several different shows match that name. Ask the user which one they mean, then call find_show again with that exact name.' };
+        output = { found: false, ...catalogueSays, different_shows: found.others, note: 'Several different shows match that name. Ask the user which one they mean, then call find_show again with that exact name.' };
       } else if (found.years) {
         turn.status(`Looked for ${what}: more than one show has this name`, 'search');
-        output = { found: false, first_released: found.years, note: 'More than one show has this name; these are the years each began. Ask the user which one they mean, then call find_show again with that year added to the title.' };
+        output = { found: false, ...catalogueSays, first_released: found.years, note: 'More than one show has this name; these are the years each began. Ask the user which one they mean, then call find_show again with that year added to the title.' };
       } else if (!found.plan.torrents && leaveOut) {
-        tellInPlex(user, turn, heldKey('all'));
-        turn.status(`Looked for ${what}: nothing beyond what is already in Plex (${seasonsHeld(held)})`, 'search');
+        tellInPlex(user, turn, heldKey(theRest ? `s${season}` : 'all'));
+        const have = guide ? heldAgainst(held, guide) : seasonsHeld(held);
+        turn.status(`Looked for ${what}: nothing beyond what is already in Plex (${have})`, 'search');
         output = {
           found: true,
+          ...catalogueSays,
           plex: plexSays,
-          note: 'Nothing more of this show could be found beyond what Plex already has, so there is nothing to download. Tell the user what they already have.',
+          note: theRest
+            ? 'The episodes Plex lacks could not be found, so there is nothing to download. Tell the user what they already have and which episodes could not be found.'
+            : 'Nothing more of this show could be found beyond what Plex already has, so there is nothing to download. Tell the user what they already have.',
         };
       } else if (!found.plan.torrents) {
         turn.status(`Looked for ${what}: nothing found`, 'search');
         // Told they already have some of it, a plain answer is a complete one.
         if (askFirst) turn.have = true;
-        output = { found: false, ...(plexSays && { plex: plexSays }), note: 'Nothing found. Check the spelling of the title, or tell the user you could not find it.' };
+        // And so it is with the catalogue's word on whether the show exists.
+        if (known) turn.known = true;
+        let note = 'Nothing found. Check the spelling of the title, or tell the user you could not find it.';
+        if (listed) note = 'The show exists, but no copy of this was found. Tell the user that. Do not look again under other spellings.';
+        else if (known?.unknown) note = 'Nothing found, and the catalogue knows no show of this name. Tell the user you could not find it and ask them to check the name. Do not look again under other spellings.';
+        output = { found: false, ...catalogueSays, ...(plexSays && { plex: plexSays }), note };
       } else if (found.plan.torrents > MAX_PLAN_TORRENTS) {
         turn.status(`Looked for ${what}: it would take ${found.plan.torrents} separate downloads`, 'search');
         output = {
           found: true,
+          ...catalogueSays,
           downloads_needed: found.plan.torrents,
           note: `Getting all of it would take ${found.plan.torrents} separate downloads, more than the limit of ${MAX_PLAN_TORRENTS} for one request. Ask the user which seasons they want, then call find_show for each season.`,
         };
       } else {
-        const { plan, show } = found;
+        const { plan } = found;
+        const show = listed ? listed.title : found.show;
         const sizeOf = (releases) => releases.reduce((sum, release) => sum + release.size, 0);
         const total = formatBytes(sizeOf(plan.parts.flatMap((part) => part.releases)));
         // For one episode the release name says more than "1 single episode".
         const summary = episode ? plan.parts[0].releases[0].title : planSummary(plan);
-        const id = cache.put(user.id, { plan: true, show, title: `${show}: ${summary}`, parts: plan.parts, ...(askFirst && { inPlex: askFirst }) });
+        const id = cache.put(user.id, {
+          plan: true,
+          show,
+          title: `${show}: ${summary}`,
+          parts: plan.parts,
+          ...(askFirst && { inPlex: askFirst }),
+          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names } }),
+        });
         log.info('show plan', { user: user.username, title, season, episode, torrents: plan.torrents, summary });
         turn.status(`Found ${what}: ${summary} (${total})`, 'search');
         // A season Plex has is not one that could not be found.
         const missing = plan.missing.filter((number) => !held.has(number));
+        // Nor is an episode Plex has. What is left is what the guide says has aired and nobody has a copy of.
+        const gaps = (plan.gaps ?? [])
+          .map((gap) => ({ ...gap, episodes: gap.episodes.filter((part) => !has(gap.season, part)) }))
+          .filter((gap) => gap.episodes.length)
+          .map((gap) => `season ${gap.season}: episode${gap.episodes.length === 1 ? '' : 's'} ${numbered(gap.episodes)}`);
+        // What is still to come, of the seasons this plan is about.
+        const toAir = guide
+          ? [...guide.values()]
+              .filter((part) => part.aired < part.episodes && (season ? part.number === season : part.aired > 0))
+              .map((part) => `season ${part.number}: ${part.episodes - part.aired} of its ${episodeCount(part.episodes)} ${part.episodes - part.aired === 1 ? 'has' : 'have'} not aired yet`)
+          : [];
         let nextStep = 'Nothing is downloading yet. Call download with this plan id to get all of it.';
         if (askFirst) {
           tellInPlex(user, turn, askFirst.key);
           turn.status(`Already in Plex: ${askFirst.label}`, 'info');
           nextStep = 'Nothing is downloading. Plex cannot tell whether that is the whole season. Tell the user how many episodes they already have and ask whether they still want this season. Call download with this plan id only after they say yes.';
+        } else if (theRest) {
+          turn.status(`Already in Plex, so left out: ${heldAgainst(new Map([[season, held.get(season)]]), guide)}`, 'info');
+          nextStep = 'Nothing is downloading yet. Call download with this plan id to get the episodes Plex lacks, and tell the user what they already had.';
         } else if (leaveOut) {
-          turn.status(`Already in Plex, so left out: ${seasonsHeld(held)}`, 'info');
+          turn.status(`Already in Plex, so left out: ${guide ? heldAgainst(held, guide) : seasonsHeld(held)}`, 'info');
           plexSays += ' That is left out of this plan.';
           nextStep = 'Nothing is downloading yet. Call download with this plan id to get the rest, and tell the user what they already had.';
         }
+        if (gaps.length || toAir.length) nextStep += ' Tell the user what could not be found or has not aired yet.';
         output = {
+          ...catalogueSays,
           ...(plexSays && { plex: plexSays }),
           plan: {
             id,
             show,
+            // Which library it belongs in follows from this.
+            ...(listed?.anime && { kind: 'anime' }),
             gets: plan.parts.map((part) => ({
               what: describePart(part),
               size: formatBytes(sizeOf(part.releases)),
@@ -845,6 +1059,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
             downloads: plan.torrents,
             total_size: total,
             ...(missing.length && { seasons_not_found: missing }),
+            ...(gaps.length && { episodes_not_found: gaps }),
+            ...(toAir.length && { not_aired_yet: toAir }),
           },
           next_step: nextStep,
         };
@@ -925,7 +1141,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           return alreadyThere(known);
         }
 
-        const spot = await place(user, library, result.title, args, turn, id);
+        const spot = await place(user, library, result.title, args, turn, id, result.known);
         if (spot.reply) return spot.reply;
         label = spot.label;
         const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags });
@@ -988,7 +1204,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
 
   return {
     /** The tool definitions for one turn. They follow the libraries as they are now. */
-    definitions: () => [catalogue?.enabled ? SEARCH_WITH_CATALOGUE : SEARCH_DEFINITION, FIND_SHOW_DEFINITION, downloadDefinition(settings.libraries()), LIST_DEFINITION],
+    definitions: () => [...(catalogue?.enabled ? [SEARCH_WITH_CATALOGUE, FIND_SHOW_WITH_CATALOGUE] : [SEARCH_DEFINITION, FIND_SHOW_DEFINITION]), downloadDefinition(settings.libraries()), LIST_DEFINITION],
 
     /** What the tools record about one user message as the model works on it. */
     newTurn: (emit, status) => ({

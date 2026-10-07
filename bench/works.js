@@ -51,7 +51,8 @@ export const WORLD = {
     // Two shows with one name, an American and a British one.
     { id: 105, name: 'Kestrelmere', year: 2005, weight: 70, country: 'US', seasons: { 1: 6, 2: 22, 3: 23, 4: 14, 5: 26, 6: 24, 7: 24, 8: 24, 9: 23 }, genres: ['comedy'] },
     { id: 106, name: 'Kestrelmere', year: 2001, weight: 60, country: 'GB', seasons: { 1: 6, 2: 6 }, genres: ['comedy'] },
-    { id: 107, name: 'Tales of the Kestrel', year: 2022, weight: 55, country: 'US', seasons: { 1: 8, 2: 8 }, genres: ['fantasy'] },
+    // Still being shown: three of season 3's eight episodes have aired.
+    { id: 107, name: 'Tales of the Kestrel', year: 2022, weight: 55, country: 'US', seasons: { 1: 8, 2: 8, 3: 8 }, last: { season: 3, episode: 3 }, genres: ['fantasy'] },
     { id: 108, name: 'Tales of Ossendale', year: 2012, weight: 40, country: 'GB', seasons: { 1: 6 }, genres: ['drama'] },
     // A serial of 1915, kept on disk under its French name.
     { id: 109, name: 'Les Vampires', akas: ['The Vampires'], year: 1915, weight: 35, country: 'FR', seasons: { 1: 10 }, genres: ['crime'] },
