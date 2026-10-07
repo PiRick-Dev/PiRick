@@ -50,6 +50,8 @@ const CLEARLY = {
 };
 // The two measures on one scale, for telling a film from a show of the same name.
 const FAME = { film: (thing) => Math.min(1, thing.known / 80), show: (thing) => thing.known / 100 };
+/** How well known a film or a show is, from 0 to 1, whichever of the two it is. */
+export const fame = (thing) => FAME[thing.kind](thing);
 
 // Wikidata's names for things.
 const P = { kind: 'P31', date: 'P577', start: 'P580', director: 'P57', cast: 'P161', creator: 'P170', series: 'P179', follows: 'P155', followedBy: 'P156', country: 'P495', language: 'P364', title: 'P1476', genre: 'P136', imdb: 'P345', occupation: 'P106' };
@@ -217,8 +219,10 @@ export function pick(candidates, wanted, clearly = CLEARLY.film) {
   const best = Math.max(...pool.map((entry) => entry.like));
   const ranked = pool.filter((entry) => entry.like === best).map((entry) => entry.candidate).sort((a, b) => b.known - a.known);
   const flags = { ...(wrongYear && { wrongYear: true }), ...(best < 3 && { inexact: true }) };
-  const clear = ranked.length === 1 || clearly(ranked[0], ranked[1]);
-  return clear ? { one: ranked[0], others: ranked.length - 1, ...flags } : { several: ranked.slice(0, MAX_CHOICES), ...flags };
+  if (ranked.length === 1 || clearly(ranked[0], ranked[1])) return { one: ranked[0], others: ranked.length - 1, ...flags };
+  // None stands out. If only one is called exactly that, and the rest merely also go by it, that one is meant.
+  const outright = ranked.filter((candidate) => candidate.key === wanted.key);
+  return outright.length === 1 ? { one: outright[0], others: ranked.length - 1, ...flags } : { several: ranked.slice(0, MAX_CHOICES), ...flags };
 }
 
 /** Splits "Kestrelmere US" into the name and the country it names, when it ends in one. */
@@ -313,7 +317,7 @@ const kindOf = (entity) => {
 /** For pages whose kind is only known from how they are described. */
 function kindSaid(description) {
   const text = String(description ?? '');
-  if (/\b(?:actor|actress|director|producer|singer|writer|character|franchise|film series|company|studio|award|festival|soundtrack|album|song|novel|book|video game)\b/i.test(text)) return null;
+  if (/\b(?:actor|actress|director|producer|singer|writer|character|franchise|film series|company|studio|award|festival|soundtrack|album|song|novel|book|video game)\b|\b(?:season|series) (?:\d+|one|two|three|four|five)\b|\b(?:season|series) of\b/i.test(text)) return null;
   if (/\b(?:television|TV|web|streaming|animated|anime|drama|comedy) (?:series|show|program|programme|sitcom|drama)\b|\bminiseries\b|\bsitcom\b|\bseries\b/i.test(text)) return 'show';
   return /\b(?:film|movie|short)\b/i.test(text) ? 'film' : null;
 }
@@ -330,6 +334,7 @@ function filmFound(entity) {
     date: null,
     countries: [],
     known: Object.keys(entity.sitelinks ?? {}).length,
+    key: nameKey(title),
     keys: keysOf(names),
     leads: leadsOf(names),
     about: describedAs(entity),
@@ -404,6 +409,7 @@ function showFound(show) {
     date,
     countries: country ? [String(country).toUpperCase()] : [],
     known: Number(show.weight) || 0,
+    key: nameKey(title),
     keys: keysOf([title]),
     leads: leadsOf([title]),
     about: cleanAbout(show.summary, ABOUT_MAX),
@@ -778,11 +784,12 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
       const fit = ({ choice }) => Number(!choice.inexact) * 2 + Number(!choice.wrongYear);
       const best = Math.max(...options.map(fit));
       const chosen = options.filter((option) => fit(option) === best);
-      const fame = (thing) => FAME[thing.kind](thing);
       const ranked = chosen.map((option) => option.entry).sort((a, b) => fame(b) - fame(a));
       const flags = { ...(chosen[0].choice.wrongYear && { wrongYear: true }), ...(chosen[0].choice.inexact && { inexact: true }) };
-      const clear = ranked.length === 1 || (fame(ranked[0]) >= 0.3 && fame(ranked[0]) >= fame(ranked[1]) * 3);
-      return clear ? { one: ranked[0], others: ranked.length - 1, ...flags } : { several: ranked.slice(0, MAX_CHOICES), ...flags };
+      if (ranked.length === 1 || (fame(ranked[0]) >= 0.3 && fame(ranked[0]) >= fame(ranked[1]) * 3)) return { one: ranked[0], others: ranked.length - 1, ...flags };
+      // As in `pick`: the one called exactly that, where the rest only also go by the name.
+      const outright = ranked.filter((thing) => thing.key === nameKey(cleanName(asked.title)));
+      return outright.length === 1 ? { one: outright[0], others: ranked.length - 1, ...flags } : { several: ranked.slice(0, MAX_CHOICES), ...flags };
     },
 
     /** A few lines about a film or show: Wikipedia's opening for a film that has a page, else what the catalogue calls it. */

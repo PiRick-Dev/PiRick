@@ -281,7 +281,8 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
       with: show.cast,
       genres: show.genres,
       anime: show.anime ? 'It is anime.' : '',
-      other_names: show.names.filter((name) => name !== show.title).slice(0, 3),
+      // Its names in other alphabets say nothing to someone reading this one.
+      other_names: show.names.filter((name) => name !== show.title && /^[\p{Script=Latin}\p{N}\p{P}\p{Zs}]+$/u.test(name)).slice(0, 3),
       plex: held === undefined ? '' : held?.seasons.size ? `Plex already has ${heldAgainst(held.seasons, show.anime ? new Map() : guide)}.` : 'Plex has none of it.',
       note: `${ONLY_LOOKED} If the user wants it fetched, call find_show with this title.`,
     });

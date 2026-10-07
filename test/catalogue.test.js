@@ -307,6 +307,12 @@ test('choosing among things with the same name', () => {
   // Two and a half times as well known is far enough; not quite twice is not.
   assert.equal(pick([thing(1, 'Charade', 1927, 22), thing(2, 'Charade', 2017, 59)], wanted('Charade')).one.id, 2);
   assert.ok(pick([thing(1, 'Charade', 1960, 32), thing(2, 'Charade', 2001, 60)], wanted('Charade')).several);
+  // Where none stands out, the one called exactly that is meant over those that only also go by the name.
+  const named = (id, name, known, also = []) => ({ id, key: nameKey(name), keys: [nameKey(name), ...also.map(nameKey)], year: 1990 + id, known });
+  assert.equal(pick([named(1, 'Charade', 60), named(2, 'The Long Charade', 50, ['Charade'])], wanted('Charade')).one.id, 1);
+  assert.ok(pick([named(1, 'Charade', 60), named(2, 'Charade', 50)], wanted('Charade')).several);
+  // But one that only also goes by the name, and is far better known, is still the one meant.
+  assert.equal(pick([named(1, 'Charade', 5), named(2, 'The Long Charade', 90, ['Charade'])], wanted('Charade')).one.id, 2);
   // Three times nothing is still nothing: two obscure films are not told apart.
   assert.ok(pick([thing(1, 'Charade', 1953, 3), thing(2, 'Charade', 1963, 0)], wanted('Charade')).several);
   // A famous film and its famous remake are not told apart either.
@@ -564,6 +570,9 @@ test('when it is not known whether a name is a film or a show, both are looked a
   // The show itself, not the film named after it.
   assert.equal((await catalogue.findAny({ title: 'Brindlemoor' })).one.kind, 'show');
   assert.deepEqual((await catalogue.findAny({ title: 'Kestrelmere' })).several.map((show) => show.year), [2005, 2001]);
+  // A show called exactly that, and a film that only also goes by the name: the show is meant.
+  const also = catalogueStandIn({ films: [{ title: 'Harbour Watch: The Film', aliases: ['Harbour Watch'], year: 2021, known: 60 }], shows: [{ id: 7, name: 'Harbour Watch', year: 2020, weight: 80, seasons: { 1: 6 } }] });
+  assert.equal((await clientFor(also).findAny({ title: 'Harbour Watch' })).one.kind, 'show');
   // A film and a show with one name, neither far better known: both are offered.
   const server = catalogueStandIn({ films: [{ title: 'Harbour Watch', year: 1998, known: 30 }], shows: [{ id: 7, name: 'Harbour Watch', year: 2020, weight: 60, seasons: { 1: 6 } }] });
   assert.deepEqual((await clientFor(server).findAny({ title: 'Harbour Watch' })).several.map((thing) => thing.kind).sort(), ['film', 'show']);

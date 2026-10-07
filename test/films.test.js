@@ -197,6 +197,15 @@ test('a show is not taken for the film that is named after it, nor a film for th
     assert.deepEqual(aFilm.outputs[0], { found: false, catalogue: 'The catalogue lists Nosferatu (1922) as a film, not a TV show.', note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' });
     const itsShow = await chat.say('No, the series', [call('find_show', { title: 'Nosferatu: The Series' })], 'I could not find a copy.');
     assert.match(itsShow.outputs[0].catalogue, /^This is Nosferatu: The Series \(2020, Germany, 1 season\)\.$/);
+
+    // An obscure film that happens to have the name outright does not stand in for a well-known show known by it.
+    const known = talkTo({ catalogue: { films: [{ title: 'Wrenfield', year: 2019, known: 2 }], shows: [{ id: 3, name: 'Wrenfield: The Cross Years', year: 2023, weight: 90, country: 'GB', seasons: { 1: 8 } }] } });
+    try {
+      const meant = await known.say('Get Wrenfield', [call('find_show', { title: 'Wrenfield' })], 'I could not find a copy.');
+      assert.match(meant.outputs[0].catalogue, /^Nothing is called “Wrenfield”\. The nearest is Wrenfield: The Cross Years \(2023, United Kingdom, 1 season\), and that is what was looked for\.$/);
+    } finally {
+      known.close();
+    }
   } finally {
     chat.close();
   }

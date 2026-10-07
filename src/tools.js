@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { GENRES, sayDate, standing } from './catalogue.js';
+import { GENRES, fame, sayDate, standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
@@ -384,7 +384,9 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (found.none || found.inexact) {
       const show = await askCatalogue(() => catalogue.findShow({ title: asked.title, year: asked.year }));
       const exact = show && !show.none && !show.inexact ? (show.one ?? show.several[0]) : null;
-      if (exact) {
+      // A show of exactly this name is what is meant, unless a film that nearly has the name is the better known.
+      const nearest = found.one ?? found.several?.[0];
+      if (exact && (!nearest || fame(exact) >= fame(nearest))) {
         const says = `The catalogue lists ${titled(exact)} as a TV show, not a film.`;
         if (!sure) return { says: [`${says} If that is what the user wants, call find_show for it.`] };
         turn.status(`Looked up ${named}: it is a TV show`, 'search');
@@ -457,7 +459,9 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (found.none || found.inexact) {
       const film = await askCatalogue(() => catalogue.findFilm({ title: wanted.name, year: wanted.year }));
       const exact = film && !film.none && !film.inexact ? (film.one ?? film.several[0]) : null;
-      if (exact) {
+      // A film of exactly this name is what is meant, unless a show that nearly has the name is the better known.
+      const nearest = found.one ?? found.several?.[0];
+      if (exact && (!nearest || fame(exact) >= fame(nearest))) {
         turn.status(`Looked up ${named}: it is a film`, 'search');
         return { output: { found: false, catalogue: `The catalogue lists ${titled(exact)} as a film, not a TV show.`, note: 'Nothing was looked for. Call search_media for it instead, with media_type set to movie.' } };
       }
