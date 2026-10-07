@@ -144,6 +144,22 @@ test('a title asked for with a digit is found under its spelled-out name', async
   assert.deepEqual([direct.asked, direct.also, direct.foundAs], [['Seven Chances 1925'], [], null]);
 });
 
+test('a program is never offered as a film, a show, an album or a book', async () => {
+  const advert = ['Seven.Chances.1925.1080p.BluRay.FREE.PLAYER.REQUIRED.www.best-codec-pack.example.exe', 9000];
+  const installer = ['Seven.Chances.1925.1080p.WEB-DL.Setup.MSI', 8000];
+  const jackett = () => fakeJackett({ 'seven chances 1925': [advert, installer, ...THE_FILM] });
+  const found = async (categories, options) => titles((await createFinder(jackett(), { retryCachedEmpty: false }).search('Seven Chances 1925', categories, options)).results);
+  // Films, shows, and a search that does not say what it is for.
+  for (const categories of [[2000], [5000], [5000, 2000], [3000], [7000], []]) assert.deepEqual(await found(categories), titles(results(THE_FILM)), `categories ${categories}`);
+  // The show planner judges relevance for itself, and is spared them too.
+  assert.deepEqual(await found([5000], { filter: false }), titles(results(THE_FILM)));
+  // Where a game or software is wanted, a program is the thing itself.
+  for (const categories of [[1000, 4050], [4000]]) assert.equal((await found(categories)).length, THE_FILM.length + 2, `categories ${categories}`);
+  // A name that only has such letters in it is not a program.
+  const named = fakeJackett({ 'seven chances 1925': [['Seven.Chances.1925.1080p.BluRay.x264-EXE', 50], ['Seven.Chances.1925.720p.WEB.exe.subs.mkv', 40]] });
+  assert.equal((await createFinder(named, { retryCachedEmpty: false }).search('Seven Chances 1925', [2000])).results.length, 2);
+});
+
 test('when nothing clearly matches, everything is returned but flagged', async () => {
   const jackett = fakeJackett({ zorblax: JUNK_FOR_7_CHANCES });
   const outcome = await createFinder(jackett, { retryCachedEmpty: false }).search('zorblax', []);

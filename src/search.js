@@ -13,6 +13,10 @@ const COPY_WORDS = new Set([
   'x264', 'x265', 'h264', 'h265', 'hevc', 'avc', 'remux', 'extended', 'remastered', 'uncut', 'unrated', 'proper', 'repack',
 ]);
 const ARTICLES = new Set(['the', 'a', 'an']);
+// A name that ends like this is a program. Offered as a film, a show, an album or a book, it is an advert or worse.
+const PROGRAM = /\.(?:exe|msi|bat|cmd|scr|apk|dmg|pkg|jar|vbs|ps1|lnk)$/i;
+// Torznab's categories for console and PC games (1000, 4050) and for software (4000): there a program is what was asked for.
+const mayBePrograms = (categories) => categories.some((id) => Math.floor(id / 1000) === 1 || Math.floor(id / 1000) === 4);
 
 const isCopyWord = (word) => COPY_WORDS.has(word) || /^\d{3,4}[pi]$/.test(word);
 const isMarker = (word) => YEAR.test(word) || isCopyWord(word.toLowerCase()) || /^s\d{1,2}(?:e\d{1,3})*$/i.test(word);
@@ -157,11 +161,15 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
      *   exact    false when nothing clearly matched and `results` is everything
      *            the indexers returned, which may be unrelated
      *
+     * A result that is a program is left out, unless the categories searched are
+     * those of games or software.
+     *
      * `filter: false` skips the relevance check, for callers that do their own.
      * `onTry(spelling)` is called before each search, to show progress.
      */
     async search(query, categories, { filter = true, onTry } = {}) {
       const found = new Map();
+      const wanted = mayBePrograms(categories ?? []) ? () => true : (result) => !PROGRAM.test(String(result.title).trim());
       const also = [];
       let foundAs = null;
       let failure = null;
@@ -177,7 +185,7 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
           if (spelling !== query) also.push(spelling);
           onTry?.(spelling);
           try {
-            for (const result of await ask(spelling, categories)) {
+            for (const result of (await ask(spelling, categories)).filter(wanted)) {
               const key = result.infoHash ?? result.title;
               if (!found.has(key)) found.set(key, result);
             }
