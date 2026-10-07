@@ -226,7 +226,13 @@ Each person chooses how PiRick looks and sounds, under **Account**. A choice app
 | Theme | What it is |
 |---|---|
 | The sea | The ship at anchor. What everyone starts with. |
+| Cinema | A picture house: red curtains and rows of seats with the house lights up, a projector beam with dust drifting through it in the dark. |
 | Plain | No picture, quiet colours. For anyone who finds the scene distracting. |
+
+<p align="center">
+  <img src="docs/screenshots/theme-cinema-light.png" width="49%" alt="The Cinema theme in light: cream walls, red curtains at both sides, a gold pelmet across the top and two rows of red seats along the bottom">
+  <img src="docs/screenshots/theme-cinema-dark.png" width="49%" alt="The Cinema theme in dark: the same hall with the lights down and a projector beam crossing it from the top right">
+</p>
 
 Every theme comes in light and dark. "Match my device" follows the device's own setting, as PiRick always has; "Light" and "Dark" hold it one way. The sign-in page shows the look last used in that browser.
 

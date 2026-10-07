@@ -192,6 +192,75 @@
   --chrome: #14171c;
 }
 
+/* Cinema. Light is the hall with the house lights up; dark is the film running. */
+:root[data-theme="cinema"] {
+  --bg: #ecd9bb;
+  --surface: #fffaf1;
+  --surface-2: #f3e6d0;
+  --text: #2b1a1a;
+  --muted: #6d5647;
+  --line: #dcc6a4;
+  --accent: #8f1d27;
+  --accent-strong: #6f141d;
+  --on-accent: #ffffff;
+  --bubble: var(--accent);
+  --on-bubble: var(--on-accent);
+  --danger: #a3261b;
+  --good: #1f6f3d;
+  --shadow: 0 1px 2px rgb(60 20 20 / 10%), 0 8px 24px rgb(60 20 20 / 16%);
+  --backdrop: rgb(50 16 20 / 50%);
+  --chrome: #dcb866;
+
+  --wall-top: #f3e3c8;
+  --wall-low: #e0c69d;
+  --drape: #a8232e;
+  --drape-fold: #7c1620;
+  --drape-trim: #d9a441;
+  /* The pelmet runs behind the name at the top of the page, so by day it is gold cloth, which dark letters show on. */
+  --pelmet: #dcb866;
+  --pelmet-trim: #a8232e;
+  --seat-far: #8d2b34;
+  --seat-near: #6c1e27;
+  --seat-shadow: #4f141b;
+  --seat-piping: #b8505a;
+  --bulb: #fff6d8;
+  --bulb-glow: rgb(255 214 130 / 55%);
+}
+
+:root[data-theme="cinema"][data-mode="dark"] {
+  --bg: #140d15;
+  --surface: #1e151f;
+  --surface-2: #2b1f2b;
+  --text: #f2e7da;
+  --muted: #b8a79c;
+  --line: #40303c;
+  --accent: #e6b84f;
+  --accent-strong: #f3cf7c;
+  --on-accent: #1d1405;
+  /* Curtain red for what the person said; gold is kept for buttons. */
+  --bubble: #7a2230;
+  --on-bubble: #fbeee2;
+  --danger: #ff8f80;
+  --good: #6fd69a;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 8px 24px rgb(0 0 0 / 50%);
+  --backdrop: rgb(4 2 6 / 68%);
+  --chrome: #0d0810;
+
+  --wall-top: #0d0810;
+  --wall-low: #1b1019;
+  --drape: #3a0d14;
+  --drape-fold: #24070c;
+  --drape-trim: #5c4520;
+  --pelmet: #2d0a10;
+  --pelmet-trim: #5c4520;
+  --seat-far: #2b1016;
+  --seat-near: #1c090e;
+  --seat-shadow: #100508;
+  --seat-piping: #45202a;
+  --beam: rgb(255 236 190 / 20%);
+  --mote: rgb(255 240 210 / 85%);
+}
+
 *,
 *::before,
 *::after {
@@ -539,6 +608,195 @@ h4 {
   }
   100% {
     transform: translateY(3px) rotate(1.4deg);
+  }
+}
+
+/* ---- Scene: the cinema ---- */
+
+:root[data-theme="cinema"] .set.cinema {
+  display: block;
+}
+
+.set.cinema {
+  background: linear-gradient(var(--wall-top), var(--wall-low));
+}
+
+/* A row of small lamps under the pelmet, lit while the house lights are up. */
+.cinema .house-lights {
+  top: 56px;
+  right: 0;
+  left: 0;
+  height: 36px;
+  background-image: radial-gradient(circle, var(--bulb) 0 3px, var(--bulb-glow) 3.5px, transparent 15px);
+  background-position: center;
+  background-size: 112px 36px;
+}
+
+/* The projector's light, from the booth at the top right, widening across the hall. */
+.cinema .beam {
+  inset: 0;
+  background: linear-gradient(to left, var(--beam), transparent 82%);
+  clip-path: polygon(100% 3%, 100% 15%, 0 80%, 0 34%);
+  animation: flicker 9s step-end infinite;
+}
+
+.cinema .mote {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--mote);
+  animation: drift-down 40s infinite;
+}
+
+.cinema .mote-1 {
+  top: 17%;
+  right: 16%;
+}
+
+.cinema .mote-2 {
+  top: 30%;
+  right: 38%;
+  width: 4px;
+  height: 4px;
+  animation-delay: -14s;
+}
+
+.cinema .mote-3 {
+  top: 42%;
+  right: 62%;
+  width: 3px;
+  height: 3px;
+  animation-delay: -27s;
+}
+
+.cinema .curtain {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: clamp(44px, 9vw, 128px);
+  height: 100%;
+}
+
+.cinema .curtain-right {
+  right: 0;
+  left: auto;
+  transform: scaleX(-1);
+}
+
+.cinema .drape {
+  fill: var(--drape);
+}
+
+.cinema .fold {
+  fill: none;
+  stroke: var(--drape-fold);
+  stroke-width: 7;
+  opacity: 0.6;
+}
+
+.cinema .tie {
+  fill: var(--drape-trim);
+}
+
+.cinema .valance {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 46px;
+}
+
+.cinema .swag {
+  fill: var(--pelmet);
+}
+
+.cinema .braid {
+  fill: none;
+  stroke: var(--pelmet-trim);
+  stroke-width: 3;
+}
+
+/* Two rows of seat backs, the nearer one lower and half a seat along. */
+.cinema .seats {
+  left: 0;
+  width: 100%;
+  height: 120px;
+}
+
+.cinema .seats-far {
+  bottom: 44px;
+}
+
+.cinema .seats-near {
+  bottom: -26px;
+}
+
+.cinema .seats-far .seat {
+  fill: var(--seat-far);
+}
+
+.cinema .seats-near .seat,
+.cinema .seats-far .row {
+  fill: var(--seat-near);
+}
+
+/* What shows between the seats is the row in front, not the wall. */
+.cinema .seats-near .row {
+  fill: var(--seat-shadow);
+}
+
+.cinema .piping {
+  fill: none;
+  stroke: var(--seat-piping);
+  stroke-width: 2;
+}
+
+/* The lamp behind a projector is never quite steady. It only ever jumps, a few
+   times in nine seconds, so there is nothing to draw in between. */
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  8% {
+    opacity: 0.82;
+  }
+  10% {
+    opacity: 1;
+  }
+  43% {
+    opacity: 0.9;
+  }
+  46% {
+    opacity: 1;
+  }
+  71% {
+    opacity: 0.86;
+  }
+  73% {
+    opacity: 1;
+  }
+}
+
+/* Dust crossing the beam: it fades in, floats down and to the left, and fades out. */
+@keyframes drift-down {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+    animation-timing-function: steps(80);
+  }
+  10% {
+    transform: translate(-18px, 10px);
+    opacity: 0.9;
+    animation-timing-function: steps(640);
+  }
+  90% {
+    transform: translate(-162px, 90px);
+    opacity: 0.9;
+    animation-timing-function: steps(80);
+  }
+  100% {
+    transform: translate(-180px, 100px);
+    opacity: 0;
   }
 }
 
