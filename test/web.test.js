@@ -45,6 +45,16 @@ test('animations only move or fade things, and none are run from script', () => 
   }
 });
 
+// A scene's own rules are written more narrowly than the rule that stops motion
+// (".cinema .beam" against ".set *"), and the narrower rule would win.
+test('for people who ask for less motion, the rule that stops it cannot be outranked', () => {
+  const css = read('static/style.css');
+  const block = /@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+  assert.match(block, /\.set \*,\s*\.helm \{\s*animation: none !important;/);
+  // And it is the only place motion is switched off, so nothing else needs the same care.
+  assert.equal(css.match(/prefers-reduced-motion/g).length, 1);
+});
+
 // ---- Themes ----------------------------------------------------------------------
 
 /** The custom properties a rule sets, for the rule with exactly this selector. */

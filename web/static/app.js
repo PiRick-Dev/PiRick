@@ -332,19 +332,33 @@ function showChoices() {
   $('#pref-personality-wrap').hidden = me.personalities.length === 0;
 }
 
-/** Saves one choice. A new look is shown at once, and put back if it could not be saved. */
-async function saveChoice(change, saved) {
-  const before = me;
-  window.pirickLook.set(change.theme ?? me.theme, change.mode ?? me.mode);
-  try {
-    me = await api('/api/me', { method: 'PUT', body: change });
-    if (saved) showNote(prefNote, saved, false);
-    else prefNote.hidden = true;
-  } catch (err) {
-    window.pirickLook.set(before.theme, before.mode);
-    showNote(prefNote, err.message, true);
-  }
-  showChoices();
+// Changes are sent one at a time, in the order they were made.
+let saving = Promise.resolve();
+let unsaved = 0;
+
+/**
+ * Saves one choice. A new look is shown at once, from what the lists say now,
+ * so that two changes made one after the other do not undo each other on
+ * screen. When the last of them has been answered, the page goes by what the
+ * server has, which puts back anything that could not be saved.
+ */
+function saveChoice(change, saved) {
+  window.pirickLook.set(prefTheme.value, prefMode.value);
+  if (unsaved === 0) prefNote.hidden = true;
+  unsaved += 1;
+  saving = saving.then(async () => {
+    try {
+      me = await api('/api/me', { method: 'PUT', body: change });
+      // Not over the top of a change that has just failed.
+      if (saved && prefNote.hidden) showNote(prefNote, saved, false);
+    } catch (err) {
+      showNote(prefNote, err.message, true);
+    }
+    unsaved -= 1;
+    if (unsaved > 0) return;
+    window.pirickLook.set(me.theme, me.mode);
+    showChoices();
+  });
 }
 prefTheme.addEventListener('change', () => saveChoice({ theme: prefTheme.value }));
 prefMode.addEventListener('change', () => saveChoice({ mode: prefMode.value }));

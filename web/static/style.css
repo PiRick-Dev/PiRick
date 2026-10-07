@@ -2130,10 +2130,13 @@ input[type="checkbox"] {
   }
 }
 
+/* For anyone who has asked their device for less motion, nothing moves. This
+   has to win over every rule that starts a movement, however that rule is
+   written, which is the one thing !important is for. */
 @media (prefers-reduced-motion: reduce) {
   .set *,
   .helm {
-    animation: none;
+    animation: none !important;
   }
 }
 
