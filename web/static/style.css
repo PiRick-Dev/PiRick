@@ -400,7 +400,7 @@ h4 {
 }
 
 /* Three flat bands of water. Each wave strip rides the top edge of its band. */
-.sea {
+.water {
   inset: auto 0 0;
   height: var(--sea-h);
   background: linear-gradient(to top, var(--wave-near) 0 30%, var(--wave-mid) 30% 64%, var(--wave-far) 64% 100%);

@@ -81,6 +81,18 @@ test('the themes people are offered are the themes the stylesheet has', () => {
   }
 });
 
+// A picture's container carries the theme's name as a class. If a piece of a
+// picture were styled under that same class, the container would take on the
+// piece's size and place, and cut off everything outside it.
+test('a theme’s name is not also the name of a piece of a picture', () => {
+  const css = read('static/style.css');
+  const page = read('index.html');
+  for (const id of [...page.matchAll(/<div class="set ([a-z-]+)">/g)].map((match) => match[1])) {
+    assert.doesNotMatch(css, new RegExp(`(?:^|[\\s,])\\.${id}\\s*[{,]`, 'm'), `style.css has a rule for .${id} by itself`);
+    assert.equal(page.match(new RegExp(`class="[^"]*(?<![\\w-])${id}(?![\\w-])[^"]*"`, 'g')).length, 1, `only the container has the class "${id}"`);
+  }
+});
+
 // A page whose script has not run can only follow the device, so the sea's night
 // colours are written out a second time for it.
 test('the sea at night has the same colours however it was arrived at', () => {
