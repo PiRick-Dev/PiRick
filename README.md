@@ -228,6 +228,7 @@ Each person chooses how PiRick looks and sounds, under **Account**. A choice app
 | The sea | The ship at anchor. What everyone starts with. |
 | Cinema | A picture house: red curtains and rows of seats with the house lights up, a projector beam with dust drifting through it in the dark. |
 | Video store | A rental shop from the 1990s, cluttered as they were: boxes facing out, shelves of tapes, posters, a counter with a television and a till, and a sign that is lit in neon after dark. |
+| Butler's study | A room in a big house: a fireplace with a painting over it, a wingback chair with tea beside it, a longcase clock, a bookcase and a tall window. Clouds pass in the morning; in the evening the fire is lit and it rains. |
 | Plain | No picture, quiet colours. For anyone who finds the scene distracting. |
 
 <p align="center">
@@ -237,6 +238,10 @@ Each person chooses how PiRick looks and sounds, under **Account**. A choice app
 <p align="center">
   <img src="docs/screenshots/theme-video-store-light.png" width="49%" alt="The Video store theme in light: bunting and film posters on a cream wall, a row of video boxes facing out above two shelves of black rental cases, cards naming the sections, a counter with a television, a till and a Please Rewind sticker, and a gumball machine">
   <img src="docs/screenshots/theme-video-store-dark.png" width="49%" alt="The Video store theme in dark: the same shop in the evening, dim except for a pink and blue neon VIDEO OPEN sign and the glowing television">
+</p>
+<p align="center">
+  <img src="docs/screenshots/theme-study-light.png" width="49%" alt="The Butler's study theme in light: striped green wallpaper over wood panelling, a marble fireplace with a painting of a ship above it, a red wingback chair, a tea table and lamp, a longcase clock, a bookcase with a globe on top, and a window with clouds going by">
+  <img src="docs/screenshots/theme-study-dark.png" width="49%" alt="The Butler's study theme in dark: the same room in the evening, lit by the fire in the grate and the reading lamp, with rain on the window">
 </p>
 
 Every theme comes in light and dark. "Match my device" follows the device's own setting, as PiRick always has; "Light" and "Dark" hold it one way. The sign-in page shows the look last used in that browser.

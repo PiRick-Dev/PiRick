@@ -346,6 +346,96 @@
   --tv-cast: rgb(120 180 255 / 22%);
 }
 
+/* Butler's study. Light is a bright morning; dark is the evening, by the fire. */
+:root[data-theme="study"] {
+  --bg: #dde5d3;
+  --surface: #fffcf5;
+  --surface-2: #f0e9d9;
+  --text: #262019;
+  --muted: #62584a;
+  --line: #d6cab2;
+  --accent: #2f5d3a;
+  --accent-strong: #244a2d;
+  --on-accent: #ffffff;
+  --bubble: #6b2030;
+  --on-bubble: #ffffff;
+  --danger: #a3261b;
+  --good: #1f6f3d;
+  --shadow: 0 1px 2px rgb(38 32 25 / 10%), 0 8px 24px rgb(38 32 25 / 16%);
+  --backdrop: rgb(38 32 25 / 50%);
+  --chrome: #e2ead9;
+
+  --wall-top: #e2ead9;
+  --wall-low: #d2dcc6;
+  --paper-stripe: rgb(47 93 58 / 8%);
+  --pane-top: #8fcbe8;
+  --pane-low: #d9eef6;
+  --puff: #ffffff;
+  --floor: #9a6a3a;
+  --floor-line: #7d5329;
+  --panel: #7a4f27;
+  --panel-line: #5e3b1a;
+  --panel-rail: #8f6033;
+  --rug: #7c2233;
+  --rug-border: #c9a24a;
+  --pendulum: #c9a24a;
+  /* The furniture is the same wood, leather and brass at any hour. After dark
+     it is dimmed all together, and lit again by the fire and the lamp. */
+  --oak: #8a5a2b;
+  --oak-dark: #5e3b1a;
+  --oak-light: #b07a45;
+  --leather: #6b2030;
+  --leather-dark: #4d1522;
+  --leather-light: #7f2a3c;
+  --forest: #2f5d3a;
+  --navy: #1f3050;
+  --mustard: #c9962e;
+  --cream: #f1e7cf;
+  --brass: #c9a24a;
+  --marble: #e9e4d8;
+  --marble-2: #cdc5b4;
+  --soot: #1c1714;
+  --iron: #3a3532;
+  --silver: #c9ced1;
+  --canvas: #bfe0ea;
+}
+
+:root[data-theme="study"][data-mode="dark"] {
+  --bg: #141a15;
+  --surface: #1c241e;
+  --surface-2: #27322a;
+  --text: #f1ead8;
+  --muted: #a9b3a2;
+  --line: #3a4a3e;
+  --accent: #e2b354;
+  --accent-strong: #f0cc82;
+  --on-accent: #1e1503;
+  --bubble: #6b2030;
+  --on-bubble: #fdeee6;
+  --danger: #ff8f80;
+  --good: #6fd69a;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 8px 24px rgb(0 0 0 / 50%);
+  --backdrop: rgb(4 6 4 / 68%);
+  --chrome: #0f1410;
+
+  --wall-top: #0f1410;
+  --wall-low: #18211a;
+  --paper-stripe: rgb(255 255 255 / 3%);
+  --pane-top: #0a1020;
+  --pane-low: #1a2740;
+  --rain: rgb(190 214 255 / 55%);
+  --floor: #2a1c10;
+  --floor-line: #1c120a;
+  --panel: #23160c;
+  --panel-line: #170e07;
+  --panel-rail: #2e1d10;
+  --rug: #2e0c14;
+  --rug-border: #4a3b1c;
+  --pendulum: #6b5626;
+  --fire-glow: rgb(255 150 60 / 30%);
+  --lamp-glow: rgb(255 214 140 / 32%);
+}
+
 *,
 *::before,
 *::after {
@@ -1263,6 +1353,439 @@ h4 {
   }
   83% {
     opacity: 0.88;
+  }
+}
+
+/* ---- Scene: the butler's study ---- */
+
+:root[data-theme="study"] .set.study {
+  display: block;
+}
+
+.set.study {
+  --floor-h: clamp(36px, 7vh, 64px);
+  --edge: max(2.5vw, calc(50% - 640px));
+  --hearth-w: clamp(170px, 23vw, 290px);
+  --nook-w: clamp(170px, 20vw, 250px);
+  background:
+    repeating-linear-gradient(90deg, transparent 0 34px, var(--paper-stripe) 34px 38px),
+    linear-gradient(var(--wall-top), var(--wall-low));
+}
+
+/* The furniture. After dark it is dimmed as one; the fire and the lamp are laid over it. */
+:root[data-mode="dark"] .study .ware {
+  filter: brightness(0.4) saturate(0.85);
+}
+
+.study .oak {
+  fill: var(--oak);
+}
+
+.study .oak-dark {
+  fill: var(--oak-dark);
+}
+
+.study .oak-light {
+  fill: var(--oak-light);
+}
+
+.study .leather {
+  fill: var(--leather);
+}
+
+.study .leather-dark {
+  fill: var(--leather-dark);
+}
+
+.study .leather-light {
+  fill: var(--leather-light);
+}
+
+.study .forest {
+  fill: var(--forest);
+}
+
+.study .navy {
+  fill: var(--navy);
+}
+
+.study .mustard {
+  fill: var(--mustard);
+}
+
+.study .cream {
+  fill: var(--cream);
+}
+
+.study .brass {
+  fill: var(--brass);
+}
+
+.study .marble {
+  fill: var(--marble);
+}
+
+.study .marble-2 {
+  fill: var(--marble-2);
+}
+
+.study .soot {
+  fill: var(--soot);
+}
+
+.study .silver {
+  fill: var(--silver);
+}
+
+.study .canvas {
+  fill: var(--canvas);
+}
+
+.study .iron,
+.study .hand,
+.study .fold,
+.study .frame,
+.study .glazing,
+.study .silver-line,
+.study .brass-line {
+  fill: none;
+  stroke: var(--iron);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.study .hand {
+  stroke: var(--soot);
+  stroke-width: 2.5;
+}
+
+.study .fold {
+  stroke: var(--leather-dark);
+  stroke-width: 4;
+  opacity: 0.7;
+}
+
+.study .frame {
+  stroke: var(--oak);
+  stroke-width: 12;
+  stroke-linecap: square;
+}
+
+.study .glazing {
+  stroke: var(--oak);
+  stroke-width: 5;
+}
+
+.study .silver-line {
+  stroke: var(--silver);
+}
+
+.study .brass-line {
+  stroke: var(--brass);
+}
+
+/* Drawings that have something laid over them fill a box of their own shape. */
+.study .window > svg,
+.study .hearth > svg,
+.study .nook > svg,
+.study .longcase > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* A tall window. Clouds go by in the morning; in the evening it rains. */
+.study .window {
+  top: 9%;
+  right: var(--edge);
+  width: clamp(118px, 15vw, 192px);
+  aspect-ratio: 200 / 290;
+}
+
+.study .pane {
+  position: absolute;
+  inset: 7% 12% 12.5%;
+  overflow: hidden;
+  background: linear-gradient(var(--pane-top), var(--pane-low));
+}
+
+.study .puff {
+  position: absolute;
+  top: 14%;
+  left: 0;
+  width: 60%;
+  fill: var(--puff);
+  animation: cross 80s steps(1600) infinite;
+}
+
+.study .puff-2 {
+  top: 52%;
+  width: 42%;
+  opacity: 0.85;
+  animation-duration: 110s;
+  animation-timing-function: steps(2200);
+  animation-delay: -60s;
+}
+
+/* The rain is one tall sheet of short strokes that slides down by exactly its
+   own repeat, so it never seems to start again. */
+.study .rain {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  width: 100%;
+  height: calc(100% + 40px);
+  fill: none;
+  stroke: var(--rain);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  animation: fall 0.8s steps(16) infinite;
+}
+
+.study .wainscot {
+  right: 0;
+  bottom: var(--floor-h);
+  left: 0;
+  height: 118px;
+  border-top: 9px solid var(--panel-rail);
+  background:
+    repeating-linear-gradient(90deg, var(--panel-line) 0 3px, transparent 3px 14px, var(--panel-line) 14px 16px, transparent 16px 118px),
+    var(--panel);
+}
+
+.study .boards {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--floor-h);
+  background:
+    repeating-linear-gradient(90deg, var(--floor-line) 0 2px, transparent 2px 150px),
+    repeating-linear-gradient(var(--floor-line) 0 1px, transparent 1px 22px),
+    var(--floor);
+}
+
+.study .rug {
+  right: 20%;
+  bottom: 5px;
+  left: 26%;
+  height: calc(var(--floor-h) - 14px);
+  border: 4px solid var(--rug-border);
+  border-radius: 3px;
+  background: var(--rug);
+  box-shadow:
+    inset 0 0 0 3px var(--rug),
+    inset 0 0 0 5px var(--rug-border);
+}
+
+/* The fireplace, with a painting of a ship over it. The fire is only lit in the evening. */
+.study .hearth {
+  bottom: calc(var(--floor-h) - 8px);
+  left: var(--edge);
+  width: var(--hearth-w);
+  aspect-ratio: 300 / 420;
+}
+
+.study .glow {
+  position: absolute;
+  inset: 28% -40% -10%;
+  background: radial-gradient(closest-side, var(--fire-glow), transparent);
+  animation: ember 5s step-end infinite;
+}
+
+.study .flame {
+  position: absolute;
+  top: 72%;
+  left: 38%;
+  width: 9%;
+  height: 16%;
+  border-radius: 50% 50% 50% 50% / 64% 64% 36% 36%;
+  background: radial-gradient(ellipse at 50% 88%, #fff6c2 0 16%, #ffbe4d 42%, #ec5a1d 78%, transparent);
+  transform-origin: 50% 100%;
+  animation: lick 1.6s step-end infinite;
+}
+
+.study .flame-2 {
+  top: 66%;
+  left: 45%;
+  width: 12%;
+  height: 22%;
+  animation-duration: 1.9s;
+  animation-delay: -0.7s;
+}
+
+.study .flame-3 {
+  top: 73%;
+  left: 55%;
+  width: 8%;
+  height: 15%;
+  animation-duration: 1.3s;
+  animation-delay: -0.4s;
+}
+
+/* A wingback chair, tea on the table beside it, and a reading lamp. */
+.study .nook {
+  bottom: calc(var(--floor-h) - 8px);
+  left: calc(var(--edge) + var(--hearth-w) + 2vw);
+  width: var(--nook-w);
+  aspect-ratio: 320 / 260;
+}
+
+.study .shade {
+  position: absolute;
+  top: 9.2%;
+  left: 85%;
+  width: 16.25%;
+  height: 13.8%;
+  background: #ffe3a1;
+  clip-path: polygon(17% 0, 83% 0, 100% 100%, 0 100%);
+}
+
+.study .lamplight {
+  position: absolute;
+  inset: -30% -20% 28% 56%;
+  background: radial-gradient(closest-side, var(--lamp-glow), transparent);
+}
+
+/* A longcase clock, whose pendulum is the one thing in the room that moves all day. */
+.study .longcase {
+  bottom: calc(var(--floor-h) - 6px);
+  left: calc(var(--edge) + var(--hearth-w) + var(--nook-w) + 4vw);
+  width: clamp(52px, 6vw, 76px);
+  aspect-ratio: 80 / 310;
+}
+
+.study .pendulum {
+  position: absolute;
+  top: 34.5%;
+  left: calc(50% - 1px);
+  width: 2px;
+  height: 33%;
+  background: var(--pendulum);
+  transform-origin: 50% 0;
+  animation: swing 2s infinite alternate;
+}
+
+.study .pendulum::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: -5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--pendulum);
+}
+
+.study .bookcase {
+  right: var(--edge);
+  bottom: calc(var(--floor-h) - 8px);
+  width: clamp(140px, 19vw, 244px);
+  aspect-ratio: 260 / 380;
+  overflow: visible;
+}
+
+/* On the walls: the bells that call the butler, and two of the family. */
+.study .bells {
+  top: 20%;
+  left: calc(var(--edge) + 1.5vw);
+  width: clamp(108px, 13vw, 168px);
+}
+
+.study .portrait {
+  top: 13%;
+  right: calc(var(--edge) + clamp(118px, 15vw, 192px) + 2.5vw);
+  width: clamp(40px, 4.6vw, 60px);
+}
+
+.study .portrait-2 {
+  top: 29%;
+  right: calc(var(--edge) + clamp(118px, 15vw, 192px) + 5.5vw);
+}
+
+/* A narrow page has room for the fireplace and the bookcase, and no more. */
+@media (max-width: 900px) {
+  .study .nook,
+  .study .longcase,
+  .study .bells,
+  .study .portrait {
+    display: none;
+  }
+}
+
+@keyframes cross {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+@keyframes fall {
+  to {
+    transform: translateY(40px);
+  }
+}
+
+/* Flames change shape in jumps, a few times a second, which is all a fire in a
+   picture needs. */
+@keyframes lick {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  18% {
+    transform: scale(0.9, 1.14);
+  }
+  37% {
+    transform: scale(1.08, 0.88) translateX(6%);
+  }
+  55% {
+    transform: scale(0.95, 1.08) translateX(-5%);
+  }
+  76% {
+    transform: scale(1.05, 0.94);
+  }
+}
+
+@keyframes ember {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  22% {
+    opacity: 0.86;
+  }
+  41% {
+    opacity: 0.95;
+  }
+  63% {
+    opacity: 0.8;
+  }
+  80% {
+    opacity: 0.92;
+  }
+}
+
+/* Slow at each end of the swing and quick through the middle, in forty steps
+   over its two seconds. */
+@keyframes swing {
+  0% {
+    transform: rotate(-5deg);
+    animation-timing-function: steps(10);
+  }
+  25% {
+    transform: rotate(-3.5deg);
+    animation-timing-function: steps(20);
+  }
+  75% {
+    transform: rotate(3.5deg);
+    animation-timing-function: steps(10);
+  }
+  100% {
+    transform: rotate(5deg);
   }
 }
 

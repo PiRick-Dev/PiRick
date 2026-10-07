@@ -9,6 +9,7 @@ export const THEMES = [
   { id: 'sea', name: 'The sea' },
   { id: 'cinema', name: 'Cinema' },
   { id: 'video-store', name: 'Video store' },
+  { id: 'study', name: 'Butler’s study' },
   { id: 'plain', name: 'Plain' },
 ];
 
