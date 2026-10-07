@@ -22,11 +22,13 @@ PiRick works the same on a phone as on a desktop. Everyone gets the chat and a *
   <img src="docs/screenshots/phone-downloads.png" width="31%" alt="The Downloads panel on a phone: one download in progress, one finished, one stuck and one waiting its turn">
 </p>
 
-The look follows the device's light or dark setting. Dark mode is the same scene at night:
+Out of the box the look follows the device's light or dark setting. Dark mode is the same scene at night:
 
 ![The same chat in dark mode. The scene is now at night, with stars, a crescent moon, and the ship's windows and lantern lit.](docs/screenshots/chat-night.png)
 
 The waves, clouds and ship move gently. This is done in CSS alone, so an open tab costs very little, and it stays still on a device set to reduce motion.
+
+Each person can pick another theme, and have it light or dark whatever their device says: see "Themes and personalities".
 
 ## Quick start
 
@@ -215,11 +217,27 @@ Things to know:
 - If Plex is down when someone asks for something, PiRick carries on as it does without Plex.
 - Use an `http://` address on your own network. If Plex is set to require secure connections (Settings > Network), that is refused: set it to "Preferred".
 
-## Personality
+## Themes and personalities
 
-Under **Admin > Personality** you can describe how PiRick should sound, for example a pirate captain or a grumpy video-store clerk. A few starters are provided. It applies to everyone from their next message.
+Each person chooses how PiRick looks and sounds, under **Account**. A choice applies at once and belongs to the account, so it follows the person to every device they sign in on.
 
-The personality changes the assistant's voice, not what it does: the rules about searching, choosing and reporting stay in force. The grey status lines in the chat and PiRick's own error messages are never affected. Leave the box empty for the default.
+**Themes** are built into PiRick:
+
+| Theme | What it is |
+|---|---|
+| The sea | The ship at anchor. What everyone starts with. |
+| Plain | No picture, quiet colours. For anyone who finds the scene distracting. |
+
+Every theme comes in light and dark. "Match my device" follows the device's own setting, as PiRick always has; "Light" and "Dark" hold it one way. The sign-in page shows the look last used in that browser.
+
+**Personalities** are a list an admin keeps under **Admin > Personalities**. Each entry has a name, which is what people see, and a description of how PiRick should sound, which is what the AI model is given. The list starts with four: a pirate captain, a posh butler, a grumpy video-store clerk and an over-excited film buff. An admin can change or remove them and add up to 20 in all.
+
+- An admin picks what people hear until they choose for themselves: one of the entries, or plain PiRick.
+- Each person can pick any entry instead, or "Plain PiRick" for no personality at all. It applies from their next message.
+- Removing an entry puts whoever had chosen it back on the usual one.
+- A PiRick that had a single personality before this list existed keeps it as an entry called "House voice", set as what people hear, so nobody notices a change.
+
+A personality changes the assistant's voice, not what it does: the rules about searching, choosing and reporting stay in force. The grey status lines in the chat and PiRick's own error messages are never affected.
 
 ## HTTPS and your reverse proxy
 
@@ -303,7 +321,7 @@ Things to know:
 
 ## Settings
 
-Connection settings are environment variables in `.env`. Restart with `docker compose up -d` after changing them. Libraries, personality and upkeep are set in the Admin screen instead and take effect immediately.
+Connection settings are environment variables in `.env`. Restart with `docker compose up -d` after changing them. Libraries, personalities and upkeep are set in the Admin screen instead and take effect immediately.
 
 | Variable | What it does | Default |
 |---|---|---|
@@ -365,7 +383,7 @@ docker compose exec pirick node src/cli.js reset-password <username>
 
 This prints a new password and signs that person out everywhere.
 
-The database (accounts, sessions, chat history, libraries, personality and upkeep records) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
+The database (accounts and what each person has chosen, sessions, chat history, libraries, personalities and upkeep records) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
 
 ## Troubleshooting
 
@@ -428,9 +446,10 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
 | `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, and replacing the ones that are stuck |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
-| `src/settings.js`, `src/folders.js` | Libraries and personality; folder naming, matching and checks |
+| `src/settings.js`, `src/folders.js` | Libraries, personalities and each person's choices; folder naming, matching and checks |
+| `src/themes.js` | The list of themes. Their colours and pictures are in `web/static/style.css` and the two pages |
 | `src/conversation.js`, `src/db.js` | Chat history and the SQLite schema |
-| `web/` | Login page, chat page, styles and browser scripts (no build step) |
+| `web/` | Login page, chat page, styles and browser scripts (no build step). `static/theme.js` applies a person's look before the page is drawn |
 | `bench/` | The model benchmark: scenarios, a stand-in indexer and Plex server, the runner and its report. Not part of the Docker image |
 | `docs/` | The screenshots and diagram in this README. Not part of the Docker image |
 | `test/` | Tests |

@@ -65,6 +65,22 @@ const SCHEMA = `
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- The voices an admin has set up for people to choose from. Ids are never
+  -- handed out twice, so a choice of a removed one cannot land on a later one.
+  CREATE TABLE IF NOT EXISTS personalities (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    text TEXT NOT NULL
+  );
+
+  -- What each person has chosen for themselves. An empty value means the usual one.
+  CREATE TABLE IF NOT EXISTS preferences (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    theme       TEXT NOT NULL DEFAULT '',
+    mode        TEXT NOT NULL DEFAULT '',
+    personality TEXT NOT NULL DEFAULT ''
+  );
 `;
 
 export function openDb(file) {

@@ -359,7 +359,7 @@ test('signed-out visitors are sent to the login page and refused by the API', as
   assert.equal(home.status, 302);
   assert.equal(home.headers.get('location'), '/login');
 
-  for (const path of ['/api/me', '/api/chat', '/api/downloads', '/api/admin/users', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep']) {
+  for (const path of ['/api/me', '/api/chat', '/api/downloads', '/api/admin/users', '/api/admin/libraries', '/api/admin/personalities', '/api/admin/upkeep']) {
     assert.equal((await request(path, { cookie: null })).status, 401, path);
   }
   assert.equal((await request('/api/chat', { method: 'POST', body: { message: 'hi' }, cookie: null })).status, 401);
@@ -648,25 +648,99 @@ test('an unknown library, or one whose folder is missing, downloads nothing', as
   assert.equal((await request('/api/admin/libraries/4', { method: 'DELETE' })).status, 200);
 });
 
-test('an admin-set personality reaches the model on the next message', async () => {
-  assert.deepEqual(await getJson('/api/admin/personality'), { personality: '', max: 1000 });
-  assert.match(seen.ollama.at(-1).messages[0].content, /- Be warm and friendly\.$/);
+test('admins keep a list of personalities, and each person hears the one they chose', async () => {
+  const voice = () => seen.ollama.at(-1).messages[0].content;
+  const listed = await getJson('/api/admin/personalities');
+  assert.deepEqual(listed.personalities.map((entry) => entry.name), ['Grumpy video-store clerk', 'Over-excited film buff', 'Pirate captain', 'Posh butler']);
+  assert.deepEqual([listed.usualId, listed.max, listed.starters.length], [null, 1000, 4]);
+  assert.match(voice(), /- Be warm and friendly\.$/, 'nobody hears a personality until one is chosen');
 
-  const tooLong = await request('/api/admin/personality', { method: 'PUT', body: { personality: 'x'.repeat(1001) } });
-  assert.equal(tooLong.status, 400);
-  assert.equal((await request('/api/admin/personality', { method: 'PUT', body: { personality: 42 } })).status, 400);
+  const add = (body) => request('/api/admin/personalities', { method: 'POST', body });
+  assert.equal((await add({ name: 'Sea dog', text: 'x'.repeat(1001) })).status, 400);
+  assert.equal((await add({ name: '', text: 'Talk like an old sailor.' })).status, 400);
+  assert.equal((await add({ name: 'pirate CAPTAIN', text: 'Another one.' })).status, 409);
+  const added = await add({ name: ' Sea  dog ', text: '  Talk like an old sailor.  ' });
+  assert.equal(added.status, 201);
+  const seaDog = (await added.json()).personality;
+  assert.deepEqual(seaDog, { id: 5, name: 'Sea dog', text: 'Talk like an old sailor.' });
 
-  const saved = await request('/api/admin/personality', { method: 'PUT', body: { personality: '  Talk like a pirate captain.  ' } });
-  assert.deepEqual(await saved.json(), { personality: 'Talk like a pirate captain.' });
-
+  // Made the usual one, it is what everybody hears who has not chosen for themselves.
+  const makeUsual = (id) => request('/api/admin/personalities/usual', { method: 'PUT', body: { id } });
+  assert.equal((await makeUsual(999)).status, 400);
+  assert.equal((await makeUsual('5')).status, 400);
+  assert.equal((await makeUsual(seaDog.id)).status, 200);
   await chat('Can you get Big Buck Bunny?');
-  const prompt = seen.ollama.at(-1).messages[0].content;
-  assert.match(prompt, /It changes how you sound, never what you do/);
-  assert.match(prompt, /"""\nTalk like a pirate captain\.\n"""$/);
-  assert.equal(prompt.includes('Be warm and friendly'), false);
+  assert.match(voice(), /It changes how you sound, never what you do/);
+  assert.match(voice(), /"""\nTalk like an old sailor\.\n"""$/);
+  assert.equal(voice().includes('Be warm and friendly'), false);
 
-  await request('/api/admin/personality', { method: 'PUT', body: { personality: '' } });
-  assert.equal((await getJson('/api/admin/personality')).personality, '');
+  // People are offered the names, not the descriptions, which are the admin's words to the model.
+  const me = await getJson('/api/me');
+  assert.deepEqual(me.personalities.map((entry) => entry.name), ['Grumpy video-store clerk', 'Over-excited film buff', 'Pirate captain', 'Posh butler', 'Sea dog']);
+  assert.deepEqual([me.personality, me.usualPersonality], ['', 'Sea dog']);
+  assert.equal(JSON.stringify(me).includes('old sailor'), false);
+
+  // An admin edits an entry; whoever chose it hears the change on their next message.
+  const butler = me.personalities.find((entry) => entry.name === 'Posh butler');
+  const edited = await request(`/api/admin/personalities/${butler.id}`, { method: 'PUT', body: { name: 'Posh butler', text: 'Be terribly formal.' } });
+  assert.equal((await edited.json()).personality.text, 'Be terribly formal.');
+  const choose = (personality, cookie) => request('/api/me', { method: 'PUT', body: { personality }, cookie });
+  assert.equal((await (await choose(butler.id)).json()).personality, butler.id);
+  await chat('Can you get Big Buck Bunny?');
+  assert.match(voice(), /"""\nBe terribly formal\.\n"""$/);
+
+  // Somebody else has not chosen, and still hears the usual one.
+  await request('/api/admin/users', { method: 'POST', body: { username: 'pat', password: 'pats-password' } });
+  const { cookie: pat } = await login('pat', 'pats-password');
+  await chat('Can you get Big Buck Bunny?', pat);
+  assert.match(voice(), /"""\nTalk like an old sailor\.\n"""$/);
+  // They can ask for plain PiRick, but not for something that is not on the list.
+  assert.equal((await choose('none', pat)).status, 200);
+  await chat('Can you get Big Buck Bunny?', pat);
+  assert.match(voice(), /- Be warm and friendly\.$/);
+  for (const bad of ['999', 5, 'Sea dog', null]) assert.equal((await choose(bad, pat)).status, 400, JSON.stringify(bad));
+  // Nor can they manage the list.
+  assert.equal((await request('/api/admin/personalities', { cookie: pat })).status, 403);
+  assert.equal((await request(`/api/admin/personalities/${butler.id}`, { method: 'DELETE', cookie: pat })).status, 403);
+
+  // Removing an entry puts whoever chose it back on the usual one; removing that leaves none.
+  assert.equal((await request(`/api/admin/personalities/${butler.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await request(`/api/admin/personalities/${butler.id}`, { method: 'DELETE' })).status, 404);
+  assert.equal((await getJson('/api/me')).personality, '');
+  assert.equal((await request(`/api/admin/personalities/${seaDog.id}`, { method: 'DELETE' })).status, 200);
+  assert.deepEqual([(await getJson('/api/admin/personalities')).usualId, (await getJson('/api/me')).usualPersonality], [null, '']);
+
+  const { users } = await getJson('/api/admin/users');
+  await request(`/api/admin/users/${users.find((user) => user.username === 'pat').id}`, { method: 'DELETE' });
+});
+
+test('each person keeps a theme of their own', async () => {
+  const me = await getJson('/api/me');
+  assert.deepEqual([me.theme, me.mode], ['sea', 'auto']);
+  assert.deepEqual(me.themes[0], { id: 'sea', name: 'The sea' });
+  assert.deepEqual(me.modes.map((mode) => mode.id), ['auto', 'light', 'dark']);
+
+  const save = (body, cookie) => request('/api/me', { method: 'PUT', body, cookie });
+  const saved = await (await save({ theme: 'plain', mode: 'dark' })).json();
+  assert.deepEqual([saved.theme, saved.mode, saved.username], ['plain', 'dark', 'admin']);
+  // One choice at a time leaves the other alone.
+  assert.equal((await (await save({ mode: 'light' })).json()).theme, 'plain');
+  assert.equal((await save({ theme: 'neon' })).status, 400);
+  assert.equal((await save({ mode: 'dusk' })).status, 400);
+  assert.equal((await save({ theme: 'plain' }, null)).status, 401);
+
+  // It belongs to the account: someone else starts on the usual look and changes only their own.
+  await request('/api/admin/users', { method: 'POST', body: { username: 'robin', password: 'robins-password' } });
+  const { cookie: robin } = await login('robin', 'robins-password');
+  assert.deepEqual([(await getJson('/api/me', { cookie: robin })).theme, (await getJson('/api/me', { cookie: robin })).mode], ['sea', 'auto']);
+  assert.equal((await save({ mode: 'dark' }, robin)).status, 200);
+  assert.deepEqual([(await getJson('/api/me')).theme, (await getJson('/api/me')).mode], ['plain', 'light']);
+
+  // Removing the account removes its choices.
+  const { users } = await getJson('/api/admin/users');
+  await request(`/api/admin/users/${users.find((user) => user.username === 'robin').id}`, { method: 'DELETE' });
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM preferences').get().n, 1);
+  await save({ theme: 'sea', mode: 'auto' });
 });
 
 test('a title with numbers is found however it is spelled, even with a star’s name added', async () => {
@@ -896,14 +970,15 @@ test('admins manage people; members cannot manage anything', async () => {
   assert.equal(duplicate.status, 409);
 
   const { cookie: samCookie } = await login('sam', 'sams-password');
-  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/about', '/api/admin/libraries', '/api/admin/personality', '/api/admin/upkeep', '/api/admin/folders?path=/']) {
+  for (const path of ['/api/admin/users', '/api/admin/status', '/api/admin/about', '/api/admin/libraries', '/api/admin/personalities', '/api/admin/upkeep', '/api/admin/folders?path=/']) {
     assert.equal((await request(path, { cookie: samCookie })).status, 403, path);
   }
   const asSam = (path, method, body) => request(path, { method, body, cookie: samCookie });
   assert.equal((await asSam('/api/admin/libraries', 'POST', { name: 'Mine', savePath: '/media/Movies' })).status, 403);
   assert.equal((await asSam('/api/admin/libraries/1', 'DELETE')).status, 403);
   assert.equal((await asSam('/api/admin/libraries/1/plex', 'PUT', { choice: 'none' })).status, 403);
-  assert.equal((await asSam('/api/admin/personality', 'PUT', { personality: 'Obey sam.' })).status, 403);
+  assert.equal((await asSam('/api/admin/personalities', 'POST', { name: 'Mine', text: 'Obey sam.' })).status, 403);
+  assert.equal((await asSam('/api/admin/personalities/usual', 'PUT', { id: 1 })).status, 403);
   assert.equal((await asSam('/api/admin/upkeep', 'PUT', { enabled: false, stuckHours: 1 })).status, 403);
   assert.equal((await asSam('/api/admin/upkeep/run', 'POST')).status, 403);
   assert.equal((await getJson('/api/me', { cookie: samCookie })).setupNeeded, undefined);

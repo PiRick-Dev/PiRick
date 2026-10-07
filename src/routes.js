@@ -7,7 +7,8 @@ import { checkFolder, isAbsolutePath, joinPath, splitPath, tidyPath } from './fo
 import { log } from './log.js';
 import { matchLibrary } from './plex.js';
 import { BASE_TAG, userTag } from './qbittorrent.js';
-import { PERSONALITY_MAX, parseLibrary, parsePlexChoice, parseUpkeep } from './settings.js';
+import { PERSONALITIES_MAX, PERSONALITY_MAX, STARTER_PERSONALITIES, parseLibrary, parsePersonality, parsePlexChoice, parseUpkeep } from './settings.js';
+import { MODES, THEMES } from './themes.js';
 
 const WEB_DIR = fileURLToPath(new URL('../web', import.meta.url));
 const MAX_MESSAGE_LENGTH = 2000;
@@ -169,10 +170,31 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
 
   api.use(requireUser);
 
-  api.get('/me', (req, res) => {
-    const { id, username, role } = req.user;
-    // Admins are told when nothing can be downloaded yet, so the page can say so.
-    res.json({ id, username, role, ...(role === 'admin' && { setupNeeded: settings.libraries().length === 0 }) });
+  /** Who is signed in, what they have chosen for themselves, and what there is to choose from. */
+  function describeMe({ id, username, role }) {
+    return {
+      id,
+      username,
+      role,
+      // Admins are told when nothing can be downloaded yet, so the page can say so.
+      ...(role === 'admin' && { setupNeeded: settings.libraries().length === 0 }),
+      ...settings.preferences(id),
+      themes: THEMES,
+      modes: MODES,
+      // Names only: a personality's description is the admin's instruction to the model.
+      personalities: settings.personalities().map((entry) => ({ id: String(entry.id), name: entry.name })),
+      usualPersonality: settings.usualPersonality()?.name ?? '',
+    };
+  }
+
+  api.get('/me', (req, res) => res.json(describeMe(req.user)));
+
+  // A person's own theme and personality. Only ever their own: there is no id in the address.
+  api.put('/me', (req, res) => {
+    const { changes, error } = settings.checkPreferences(req.body);
+    if (error) return res.status(400).json({ error });
+    settings.setPreferences(req.user.id, changes);
+    res.json(describeMe(req.user));
   });
 
   api.post('/password', async (req, res) => {
@@ -420,19 +442,60 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     }
   });
 
-  // ---- Admin: personality ------------------------------------------------------
+  // ---- Admin: personalities ----------------------------------------------------
 
-  admin.get('/personality', (req, res) => res.json({ personality: settings.personality(), max: PERSONALITY_MAX }));
+  // The list people choose from, which entry is the usual one, and the starters an admin can bring back.
+  admin.get('/personalities', (req, res) =>
+    res.json({
+      personalities: settings.personalities(),
+      usualId: settings.usualPersonality()?.id ?? null,
+      starters: STARTER_PERSONALITIES,
+      max: PERSONALITY_MAX,
+    }),
+  );
 
-  admin.put('/personality', (req, res) => {
-    if (typeof req.body?.personality !== 'string') return res.status(400).json({ error: 'Bad request.' });
-    const personality = req.body.personality.trim();
-    if (personality.length > PERSONALITY_MAX) {
-      return res.status(400).json({ error: `Keep the personality under ${PERSONALITY_MAX} characters.` });
+  admin.post('/personalities', (req, res) => {
+    const { personality, error } = parsePersonality(req.body);
+    if (error) return res.status(400).json({ error });
+    if (settings.personalities().length >= PERSONALITIES_MAX) {
+      return res.status(400).json({ error: `There can be at most ${PERSONALITIES_MAX} personalities. Remove one first.` });
     }
-    settings.setPersonality(personality);
-    log.info('personality changed', { by: req.user.username, length: personality.length });
-    res.json({ personality });
+    const saved = settings.addPersonality(personality);
+    if (!saved) return res.status(409).json({ error: 'There is already a personality with that name.' });
+    log.info('personality added', { name: saved.name, by: req.user.username });
+    res.status(201).json({ personality: saved });
+  });
+
+  // Which entry people hear unless they choose otherwise; null for plain PiRick.
+  admin.put('/personalities/usual', (req, res) => {
+    const id = req.body?.id ?? null;
+    if (id !== null && !(Number.isInteger(id) && settings.personality(id))) {
+      return res.status(400).json({ error: 'That personality no longer exists.' });
+    }
+    settings.setUsualPersonality(id);
+    log.info('usual personality changed', { name: id === null ? '(none)' : settings.personality(id).name, by: req.user.username });
+    res.json({ usualId: id });
+  });
+
+  admin.param('personalityId', (req, res, next, id) => {
+    req.personality = /^\d{1,15}$/.test(id) ? settings.personality(Number(id)) : null;
+    if (!req.personality) return res.status(404).json({ error: 'That personality no longer exists.' });
+    next();
+  });
+
+  admin.put('/personalities/:personalityId', (req, res) => {
+    const { personality, error } = parsePersonality(req.body);
+    if (error) return res.status(400).json({ error });
+    const saved = settings.updatePersonality(req.personality.id, personality);
+    if (!saved) return res.status(409).json({ error: 'There is already a personality with that name.' });
+    log.info('personality changed', { name: saved.name, by: req.user.username });
+    res.json({ personality: saved });
+  });
+
+  admin.delete('/personalities/:personalityId', (req, res) => {
+    settings.removePersonality(req.personality.id);
+    log.info('personality removed', { name: req.personality.name, by: req.user.username });
+    res.json({ ok: true });
   });
 
   // ---- Admin: people -----------------------------------------------------------

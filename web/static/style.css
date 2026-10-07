@@ -1,3 +1,13 @@
+/* ---- Themes ----
+
+   A person chooses a theme and whether it is light or dark. theme.js writes
+   both on the root element before the page is drawn: data-theme, and data-mode,
+   which is always "light" or "dark" (it works out "match my device" itself).
+   Each theme sets the same custom properties, once for light and once for dark.
+
+   The sea in daylight is the starting point for everything, and is all a page
+   shows if the script has not run. */
+
 :root {
   color-scheme: light dark;
   --bg: #a9dff0;
@@ -17,6 +27,8 @@
   --shadow: 0 1px 2px rgb(43 33 24 / 10%), 0 8px 24px rgb(43 33 24 / 16%);
   --backdrop: rgb(6 38 56 / 55%);
   --font-display: "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", Georgia, serif;
+  /* What a phone's browser colours its own bars with. */
+  --chrome: #6fc3e6;
 
   /* The scene behind the app. Night is the same picture with these swapped. */
   --sea-h: clamp(120px, 28vh, 260px);
@@ -44,8 +56,61 @@
   --ship-glow: transparent;
 }
 
+:root[data-mode="light"] {
+  color-scheme: light;
+}
+
+:root[data-mode="dark"] {
+  color-scheme: dark;
+}
+
+/* The sea at night. These colours are written out twice: here for the choice a
+   person has made, and below for a page whose script has not run, which can
+   only follow the device. A test keeps the two lists the same. */
+:root[data-theme="sea"][data-mode="dark"] {
+  --bg: #0e1c40;
+  --surface: #14213a;
+  --surface-2: #1d2e4d;
+  --text: #efe4c8;
+  --muted: #9fabc2;
+  --line: #2e4063;
+  --accent: #e9b44c;
+  --accent-strong: #f6cd7a;
+  --on-accent: #1b1405;
+  /* Lantern gold suits a button, but a chat full of it would glare at night. */
+  --bubble: #245a82;
+  --on-bubble: #f3ead2;
+  --danger: #ff8f80;
+  --good: #6fd69a;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 45%);
+  --backdrop: rgb(2 6 16 / 65%);
+  --chrome: #050a1c;
+
+  --sky-top: #050a1c;
+  --sky-mid: #0e1c40;
+  --sky-low: #26406e;
+  --orb: #f3efd8;
+  --orb-glow: rgb(243 239 216 / 22%);
+  --cloud: #22335a;
+  --isle-sand: #0d1930;
+  --isle-green: #091425;
+  --palm-trunk: #091425;
+  --wave-far: #1a3f6b;
+  --wave-mid: #102c50;
+  --wave-near: #091c36;
+  --foam: rgb(190 214 255 / 28%);
+  --ship-hull: #0a1322;
+  --ship-dark: #060c17;
+  --ship-trim: #4a4326;
+  --ship-sail: #33456a;
+  --ship-sail-2: #2a3a5c;
+  --ship-flag: #04070e;
+  --ship-light: #ffcf66;
+  --ship-glow: rgb(255 200 90 / 55%);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-mode]) {
     --bg: #0e1c40;
     --surface: #14213a;
     --surface-2: #1d2e4d;
@@ -62,6 +127,7 @@
     --good: #6fd69a;
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 45%);
     --backdrop: rgb(2 6 16 / 65%);
+    --chrome: #050a1c;
 
     --sky-top: #050a1c;
     --sky-mid: #0e1c40;
@@ -85,6 +151,45 @@
     --ship-light: #ffcf66;
     --ship-glow: rgb(255 200 90 / 55%);
   }
+}
+
+/* Plain: no picture, quiet colours. */
+:root[data-theme="plain"] {
+  --bg: #efe9dd;
+  --surface: #fffdf8;
+  --surface-2: #ece4d4;
+  --text: #2a2622;
+  --muted: #655c50;
+  --line: #d6cbb8;
+  --accent: #285c63;
+  --accent-strong: #1d474d;
+  --on-accent: #ffffff;
+  --bubble: var(--accent);
+  --on-bubble: var(--on-accent);
+  --danger: #a3261b;
+  --good: #1f6f3d;
+  --shadow: 0 1px 2px rgb(42 38 34 / 8%), 0 8px 24px rgb(42 38 34 / 12%);
+  --backdrop: rgb(42 38 34 / 45%);
+  --chrome: #efe9dd;
+}
+
+:root[data-theme="plain"][data-mode="dark"] {
+  --bg: #14171c;
+  --surface: #1d2128;
+  --surface-2: #282d37;
+  --text: #e9e6df;
+  --muted: #a3a9b4;
+  --line: #373e4b;
+  --accent: #9fd0c9;
+  --accent-strong: #bfe3dd;
+  --on-accent: #0f1f1d;
+  --bubble: #2c4f5a;
+  --on-bubble: #eef4f5;
+  --danger: #ff8f80;
+  --good: #6fd69a;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 45%);
+  --backdrop: rgb(0 0 0 / 60%);
+  --chrome: #14171c;
 }
 
 *,
@@ -156,24 +261,51 @@ h4 {
   inset: 0;
   z-index: -1;
   overflow: hidden;
-  background: linear-gradient(var(--sky-top), var(--sky-mid) 45%, var(--sky-low) calc(100% - var(--sea-h)));
   pointer-events: none;
 }
 
-.scene > * {
+/* Every theme's picture is in the page, each in a set of its own, and only the
+   chosen one is shown. A set that is not shown is not drawn and its motion does
+   not run, so the others cost nothing. */
+.set {
+  position: absolute;
+  inset: 0;
+  display: none;
+  overflow: hidden;
+}
+
+.set > * {
   position: absolute;
 }
 
+:root:not([data-theme]) .set.sea,
+:root[data-theme="sea"] .set.sea {
+  display: block;
+}
+
+.set.sea {
+  background: linear-gradient(var(--sky-top), var(--sky-mid) 45%, var(--sky-low) calc(100% - var(--sea-h)));
+}
+
+/* Pieces that belong to only one of light and dark. */
 .scene .night {
   display: none;
 }
 
+:root[data-mode="dark"] .scene .day {
+  display: none;
+}
+
+:root[data-mode="dark"] .scene .night {
+  display: block;
+}
+
 @media (prefers-color-scheme: dark) {
-  .scene .day {
+  :root:not([data-mode]) .scene .day {
     display: none;
   }
 
-  .scene .night {
+  :root:not([data-mode]) .scene .night {
     display: block;
   }
 }
@@ -411,7 +543,7 @@ h4 {
 }
 
 /* Nothing needs to move behind an open dialog. */
-body:has(dialog[open]) .scene > * {
+body:has(dialog[open]) .set > * {
   animation-play-state: paused;
 }
 
@@ -751,7 +883,7 @@ input[type="checkbox"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .scene > *,
+  .set > *,
   .helm {
     animation: none;
   }
@@ -919,7 +1051,9 @@ progress {
 }
 
 #user-form,
-#library-form {
+#library-form,
+#personality-form,
+#password-form {
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }

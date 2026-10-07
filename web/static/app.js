@@ -313,10 +313,56 @@ $('#dl-all').addEventListener('change', loadDownloads);
 
 // ---- Account --------------------------------------------------------------
 
-$('#btn-account').addEventListener('click', () => {
+const prefTheme = $('#pref-theme');
+const prefMode = $('#pref-mode');
+const prefPersonality = $('#pref-personality');
+const prefNote = $('#pref-note');
+
+function fillSelect(select, entries, chosen) {
+  select.replaceChildren(...entries.map((entry) => h('option', { value: entry.id }, entry.name)));
+  select.value = chosen;
+}
+
+// The person's own choices. The personalities are the ones an admin has set up.
+function showChoices() {
+  fillSelect(prefTheme, me.themes, me.theme);
+  fillSelect(prefMode, me.modes, me.mode);
+  const usual = { id: '', name: `PiRick's usual voice (${me.usualPersonality || 'plain'})` };
+  fillSelect(prefPersonality, [usual, ...me.personalities, { id: 'none', name: 'Plain PiRick' }], me.personality);
+  $('#pref-personality-wrap').hidden = me.personalities.length === 0;
+}
+
+/** Saves one choice. A new look is shown at once, and put back if it could not be saved. */
+async function saveChoice(change, saved) {
+  const before = me;
+  window.pirickLook.set(change.theme ?? me.theme, change.mode ?? me.mode);
+  try {
+    me = await api('/api/me', { method: 'PUT', body: change });
+    if (saved) showNote(prefNote, saved, false);
+    else prefNote.hidden = true;
+  } catch (err) {
+    window.pirickLook.set(before.theme, before.mode);
+    showNote(prefNote, err.message, true);
+  }
+  showChoices();
+}
+prefTheme.addEventListener('change', () => saveChoice({ theme: prefTheme.value }));
+prefMode.addEventListener('change', () => saveChoice({ mode: prefMode.value }));
+prefPersonality.addEventListener('change', () => saveChoice({ personality: prefPersonality.value }, 'PiRick will sound like this from your next message.'));
+
+$('#btn-account').addEventListener('click', async () => {
   $('#password-form').reset();
   $('#password-note').hidden = true;
+  prefNote.hidden = true;
+  showChoices();
   $('#dlg-account').showModal();
+  // An admin may have changed the list of personalities since the page was loaded.
+  try {
+    me = await api('/api/me');
+    showChoices();
+  } catch {
+    // What was loaded with the page is still shown.
+  }
 });
 
 $('#password-form').addEventListener('submit', async (event) => {
@@ -349,7 +395,7 @@ const TAB_LOADERS = {
     loadBuild();
   },
   libraries: () => loadLibraries(),
-  personality: () => loadPersonality(),
+  personality: () => loadPersonalities(),
   upkeep: () => loadUpkeep(),
   people: () => loadUsers(),
 };
@@ -608,45 +654,103 @@ libraryForm.elements.savePath.addEventListener('input', () => {
   folderTimer = setTimeout(suggestFolders, 250);
 });
 
-// Personality
+// Personalities: the list people choose from under Account.
 
 const personalityForm = $('#personality-form');
-const personalityBox = personalityForm.elements.personality;
-const PERSONALITY_PRESETS = {
-  pirate: 'You are a cheerful pirate captain. You call the user "matey", talk of treasure and the high seas, and say "Arr" now and then.',
-  butler: 'You are an impeccably polite English butler. You are discreet and unflappable, call the user "sir or madam", and take quiet pride in good service.',
-  clerk: 'You are a grumpy but lovable video-store clerk from the 1990s. You grumble, you have strong opinions about films, and you help anyway.',
-  buff: 'You are an over-excited film buff. Whatever the user asks for is a brilliant choice, and you cannot resist adding one short fun fact about it.',
-};
+const personalityNote = $('#personality-note');
+const personalityUsual = $('#personality-usual');
+let editingPersonality = null;
 
-async function loadPersonality() {
+function resetPersonalityForm() {
+  editingPersonality = null;
+  personalityForm.reset();
+  $('#personality-form-title').textContent = 'Add a personality';
+  $('#personality-submit').textContent = 'Add personality';
+  $('#personality-cancel').hidden = true;
+}
+
+function editPersonality(entry) {
+  editingPersonality = entry;
+  personalityForm.elements.name.value = entry.name;
+  personalityForm.elements.text.value = entry.text;
+  $('#personality-form-title').textContent = `Edit ${entry.name}`;
+  $('#personality-submit').textContent = 'Save changes';
+  $('#personality-cancel').hidden = false;
+  personalityNote.hidden = true;
+  personalityForm.scrollIntoView({ block: 'nearest' });
+  personalityForm.elements.name.focus();
+}
+
+function personalityRow(entry, usualId) {
+  const remove = async () => {
+    if (!confirm(`Remove ${entry.name}? Anyone who chose it goes back to the usual voice.`)) return;
+    try {
+      await api(`/api/admin/personalities/${entry.id}`, { method: 'DELETE' });
+      if (editingPersonality?.id === entry.id) resetPersonalityForm();
+      await loadPersonalities();
+    } catch (err) {
+      showNote(personalityNote, err.message, true);
+    }
+  };
+  return h(
+    'li',
+    { class: 'library' },
+    h('div', { class: 'library-head' }, h('strong', {}, entry.name), entry.id === usualId && h('span', { class: 'muted' }, 'what people hear unless they choose')),
+    h('div', { class: 'muted small' }, entry.text),
+    h(
+      'div',
+      { class: 'row-actions' },
+      h('button', { type: 'button', onclick: () => editPersonality(entry) }, 'Edit'),
+      h('button', { type: 'button', class: 'danger', onclick: remove }, 'Remove'),
+    ),
+  );
+}
+
+async function loadPersonalities() {
   try {
-    const { personality, max } = await api('/api/admin/personality');
-    personalityBox.value = personality;
-    personalityBox.maxLength = max;
+    const { personalities, usualId, starters, max } = await api('/api/admin/personalities');
+    $('#personality-list').replaceChildren(...personalities.map((entry) => personalityRow(entry, usualId)));
+    fillSelect(personalityUsual, [{ id: '', name: 'Plain PiRick (no personality)' }, ...personalities.map(({ id, name }) => ({ id: String(id), name }))], String(usualId ?? ''));
+    personalityForm.elements.text.maxLength = max;
+    // A starter fills in the form; nothing is added until it is saved.
+    const fill = (starter) => () => {
+      personalityForm.elements.name.value = starter.name;
+      personalityForm.elements.text.value = starter.text;
+      showNote(personalityNote, 'Edit it if you like, then save.', false);
+    };
+    $('#personality-starters').replaceChildren(
+      h('span', { class: 'muted' }, 'Start from:'),
+      ...starters.map((starter) => h('button', { type: 'button', onclick: fill(starter) }, starter.name)),
+    );
   } catch (err) {
-    showNote($('#personality-note'), err.message, true);
+    showNote(personalityNote, err.message, true);
   }
 }
 
-for (const button of personalityForm.querySelectorAll('[data-preset]')) {
-  button.addEventListener('click', () => {
-    personalityBox.value = PERSONALITY_PRESETS[button.dataset.preset];
-    showNote($('#personality-note'), 'Edit it if you like, then save.', false);
-  });
-}
+personalityUsual.addEventListener('change', async () => {
+  try {
+    await api('/api/admin/personalities/usual', { method: 'PUT', body: { id: personalityUsual.value ? Number(personalityUsual.value) : null } });
+    showNote(personalityNote, 'Saved. It applies from each person’s next message, unless they have chosen for themselves.', false);
+  } catch (err) {
+    showNote(personalityNote, err.message, true);
+  }
+  await loadPersonalities();
+});
 
 personalityForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const note = $('#personality-note');
+  const fields = { name: personalityForm.elements.name.value, text: personalityForm.elements.text.value };
+  const id = editingPersonality?.id;
   try {
-    const { personality } = await api('/api/admin/personality', { method: 'PUT', body: { personality: personalityBox.value } });
-    personalityBox.value = personality;
-    showNote(note, personality ? 'Saved. PiRick will sound like this from the next message.' : 'Saved. PiRick is back to its friendly default.', false);
+    const { personality } = await api(id ? `/api/admin/personalities/${id}` : '/api/admin/personalities', { method: id ? 'PUT' : 'POST', body: fields });
+    resetPersonalityForm();
+    showNote(personalityNote, `${personality.name} was saved.`, false);
+    await loadPersonalities();
   } catch (err) {
-    showNote(note, err.message, true);
+    showNote(personalityNote, err.message, true);
   }
 });
+$('#personality-cancel').addEventListener('click', resetPersonalityForm);
 
 // Upkeep
 
@@ -797,6 +901,8 @@ $('#user-form').addEventListener('submit', async (event) => {
 
 async function start() {
   me = await api('/api/me');
+  // The account's own look wins over whatever this browser showed last.
+  window.pirickLook.set(me.theme, me.mode);
   $('#me-name').textContent = me.username;
   $('#welcome-title').textContent = `Hi ${me.username}, what would you like to watch?`;
   if (me.role === 'admin') {

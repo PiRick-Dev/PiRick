@@ -66,7 +66,8 @@ export function createWorld(setup = {}, connect) {
 
   const settings = createSettings(db);
   for (const library of setup.libraries ?? LIBRARIES) settings.addLibrary(library);
-  if (setup.personality) settings.setPersonality(setup.personality);
+  // The scenario's personality is the usual one, which is what its user hears.
+  if (setup.personality) settings.setUsualPersonality(settings.addPersonality({ name: 'Benchmark', text: setup.personality }).id);
   const logNote = db.prepare('INSERT INTO upkeep_log (at, username, action, detail) VALUES (?, ?, ?, ?)');
   for (const detail of setup.notes ?? []) logNote.run(Date.now(), USERNAME, 'replaced', detail);
 

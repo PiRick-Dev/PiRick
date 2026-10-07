@@ -148,7 +148,7 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
       try {
         const reply = await ollama.chat({
           messages: [
-            { role: 'system', content: catchUpPrompt(user, settings.personality()) },
+            { role: 'system', content: catchUpPrompt(user, settings.personalityFor(user.id)) },
             { role: 'user', content: `Notes:\n${notes.map((text) => `- ${text}`).join('\n')}` },
           ],
           onDelta: (delta) => {
@@ -181,7 +181,7 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
       // Libraries and personality are read once, so a turn sees one consistent setup.
       const definitions = tools.definitions();
       const messages = [
-        { role: 'system', content: systemPrompt(user, settings.libraries(), settings.personality(), Boolean(plex?.enabled)) },
+        { role: 'system', content: systemPrompt(user, settings.libraries(), settings.personalityFor(user.id), Boolean(plex?.enabled)) },
         ...conversation.context(user.id),
         userMessage,
       ];

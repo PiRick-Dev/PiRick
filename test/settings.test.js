@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDb } from '../src/db.js';
-import { createSettings, parseLibrary } from '../src/settings.js';
+import { STARTER_PERSONALITIES, createSettings, parseLibrary, parsePersonality } from '../src/settings.js';
 
 const valid = { name: 'TV', description: 'Live-action series', savePath: '/media/TV', perTitle: true, category: '' };
 
@@ -57,10 +57,119 @@ test('libraries are stored, renamed and removed; names are unique whatever the c
   assert.deepEqual(settings.libraries().map((library) => library.name), ['TV Shows']);
 });
 
-test('personality is empty until set and can be replaced', () => {
-  const settings = createSettings(openDb(':memory:'));
-  assert.equal(settings.personality(), '');
-  settings.setPersonality('Talk like a pirate.');
-  settings.setPersonality('Talk like a butler.');
-  assert.equal(settings.personality(), 'Talk like a butler.');
+/** A database with some people in it, who can then have choices of their own. */
+function withPeople(...usernames) {
+  const db = openDb(':memory:');
+  const add = db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, 'none', 'user', 0)");
+  const ids = usernames.map((username) => Number(add.run(username).lastInsertRowid));
+  return { db, ids };
+}
+
+test('the list of personalities starts with the starters and is an admin’s to change', () => {
+  const { db, ids: [alice] } = withPeople('alice');
+  const settings = createSettings(db);
+  const names = () => settings.personalities().map((entry) => entry.name);
+  assert.deepEqual(names(), ['Grumpy video-store clerk', 'Over-excited film buff', 'Pirate captain', 'Posh butler']);
+  assert.deepEqual(settings.personalities().map((entry) => entry.text).sort(), STARTER_PERSONALITIES.map((entry) => entry.text).sort());
+  // Nobody hears a personality until one is made the usual one, or they choose.
+  assert.equal(settings.usualPersonality(), null);
+  assert.equal(settings.personalityFor(alice), '');
+
+  const seaDog = settings.addPersonality({ name: 'Sea dog', text: 'Talk like an old sailor.' });
+  assert.deepEqual(seaDog, { id: 5, name: 'Sea dog', text: 'Talk like an old sailor.' });
+  assert.equal(settings.addPersonality({ name: 'sea DOG', text: 'Again.' }), null, 'names are unique whatever the capitals');
+  assert.equal(settings.updatePersonality(seaDog.id, { name: 'Pirate captain', text: 'x' }), null, 'cannot take another entry’s name');
+  assert.equal(settings.updatePersonality(seaDog.id, { name: 'Sea Dog', text: 'Talk like a very old sailor.' }).name, 'Sea Dog');
+
+  settings.setUsualPersonality(seaDog.id);
+  assert.equal(settings.usualPersonality().name, 'Sea Dog');
+  assert.equal(settings.personalityFor(alice), 'Talk like a very old sailor.');
+
+  // Removing the usual one leaves none. Its number is never given to a later entry.
+  assert.equal(settings.removePersonality(seaDog.id), true);
+  assert.equal(settings.removePersonality(seaDog.id), false);
+  assert.equal(settings.usualPersonality(), null);
+  assert.equal(settings.addPersonality({ name: 'Newcomer', text: 'Be brief.' }).id, 6);
+  assert.equal(settings.personalityFor(alice), '');
+
+  // A starter that has been removed does not come back the next time PiRick starts.
+  settings.removePersonality(settings.personalities().find((entry) => entry.name === 'Posh butler').id);
+  assert.deepEqual(createSettings(db).personalities().map((entry) => entry.name), ['Grumpy video-store clerk', 'Newcomer', 'Over-excited film buff', 'Pirate captain']);
+});
+
+test('what an admin enters for a personality is checked', () => {
+  assert.deepEqual(parsePersonality({ name: '  Sea   dog ', text: '  Talk like a sailor.\nBe brief.  ' }).personality, { name: 'Sea dog', text: 'Talk like a sailor.\nBe brief.' });
+  for (const bad of [{ name: '', text: 'x' }, { name: 'x'.repeat(41), text: 'x' }, { name: 'Sea "dog"', text: 'x' }, { name: 'Fine', text: '   ' }, { name: 'Fine', text: 'x'.repeat(1001) }, { name: 'Fine', text: 42 }, null]) {
+    assert.ok(parsePersonality(bad).error, JSON.stringify(bad));
+  }
+});
+
+test('the one personality an earlier version kept becomes an entry, and the usual one', () => {
+  const earlier = (text) => {
+    const { db, ids: [alice] } = withPeople('alice');
+    db.prepare("INSERT INTO settings (key, value) VALUES ('personality', ?)").run(text);
+    return { db, alice, settings: createSettings(db) };
+  };
+
+  // Written by the admin: it is kept under a name of its own, so nobody hears a change.
+  const custom = earlier('  Talk like a ship’s cat.  ');
+  assert.deepEqual(custom.settings.usualPersonality(), { id: 5, name: 'House voice', text: 'Talk like a ship’s cat.' });
+  assert.equal(custom.settings.personalities().length, 5);
+  assert.equal(custom.settings.personalityFor(custom.alice), 'Talk like a ship’s cat.');
+  // Starting again changes nothing, even after the admin has chosen otherwise.
+  custom.settings.setUsualPersonality(null);
+  const again = createSettings(custom.db);
+  assert.equal(again.personalities().length, 5);
+  assert.equal(again.usualPersonality(), null);
+
+  // One of the starters, unchanged: that starter is the usual one, with no second copy.
+  const starter = earlier(STARTER_PERSONALITIES[1].text);
+  assert.equal(starter.settings.usualPersonality().name, 'Posh butler');
+  assert.equal(starter.settings.personalities().length, 4);
+
+  // None was set: the starters, and nobody hears one.
+  assert.equal(earlier('   ').settings.usualPersonality(), null);
+});
+
+test('each person has a theme and a personality of their own', () => {
+  const { db, ids: [alice, bob] } = withPeople('alice', 'bob');
+  const settings = createSettings(db);
+  const [clerk] = settings.personalities();
+  assert.deepEqual(settings.preferences(alice), { theme: 'sea', mode: 'auto', personality: '' });
+
+  // Only what is on offer is accepted, and only what was sent is changed.
+  assert.deepEqual(settings.checkPreferences({ theme: 'plain' }), { changes: { theme: 'plain' } });
+  assert.deepEqual(settings.checkPreferences({ mode: 'dark', personality: String(clerk.id), extra: 1 }), { changes: { mode: 'dark', personality: String(clerk.id) } });
+  assert.deepEqual(settings.checkPreferences({}), { changes: {} });
+  for (const bad of [{ theme: 'neon' }, { theme: 7 }, { mode: 'dusk' }, { personality: '999' }, { personality: clerk.id }, { personality: 'none; drop' }, { personality: null }]) {
+    assert.ok(settings.checkPreferences(bad).error, JSON.stringify(bad));
+  }
+
+  settings.setPreferences(alice, { theme: 'plain' });
+  settings.setPreferences(alice, { mode: 'dark', personality: String(clerk.id) });
+  assert.deepEqual(settings.preferences(alice), { theme: 'plain', mode: 'dark', personality: String(clerk.id) });
+  assert.deepEqual(settings.preferences(bob), { theme: 'sea', mode: 'auto', personality: '' }, 'one person’s choices are theirs alone');
+  assert.equal(settings.personalityFor(alice), clerk.text);
+
+  // With a usual personality set, each person hears their own choice, the usual one, or none.
+  const [, buff] = settings.personalities();
+  settings.setUsualPersonality(buff.id);
+  settings.setPreferences(bob, { personality: 'none' });
+  assert.equal(settings.personalityFor(alice), clerk.text);
+  assert.equal(settings.personalityFor(bob), '');
+  settings.setPreferences(bob, { personality: '' });
+  assert.equal(settings.personalityFor(bob), buff.text);
+
+  // An entry that is removed puts whoever chose it back on the usual one.
+  settings.removePersonality(clerk.id);
+  assert.equal(settings.preferences(alice).personality, '');
+  assert.equal(settings.personalityFor(alice), buff.text);
+
+  // A theme that a later version no longer has reads as the usual one.
+  db.prepare("UPDATE preferences SET theme = 'retired', mode = 'dusk' WHERE user_id = ?").run(alice);
+  assert.deepEqual(settings.preferences(alice), { theme: 'sea', mode: 'auto', personality: '' });
+
+  // Choices go when the account goes.
+  db.prepare('DELETE FROM users WHERE id = ?').run(alice);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM preferences').get().n, 1);
 });
