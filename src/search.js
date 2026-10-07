@@ -63,6 +63,24 @@ export function withoutTrailingWords(query) {
   return words.slice(0, year + 1).join(' ');
 }
 
+/**
+ * What a search for a film is made of: its title, its year, the words that
+ * describe a copy ("1080p", "BluRay"), and whether it names a season or an
+ * episode. A year that comes first is part of the title ("1808"), and words
+ * after the year are not ("7 Chances 1925 Buster Keaton").
+ */
+export function splitQuery(query) {
+  const words = String(query ?? '').replace(/[()[\]]/g, ' ').split(/\s+/).filter(Boolean);
+  const season = (word) => /^s\d{1,2}(?:e\d{1,3})*$/i.test(word);
+  const at = words.findLastIndex((word, i) => i > 0 && YEAR.test(word));
+  return {
+    title: (at > 0 ? words.slice(0, at) : words).filter((word) => !isCopyWord(word.toLowerCase()) && !season(word)).join(' '),
+    year: at > 0 ? Number(words[at]) : null,
+    copy: words.filter((word) => isCopyWord(word.toLowerCase())),
+    episodes: words.some(season),
+  };
+}
+
 /** The same query in other capitals: the same search to an indexer, a new one to Jackett's cache. */
 function recapitalise(query) {
   const titled = query.replace(/\p{L}+/gu, (word) => word[0].toUpperCase() + word.slice(1).toLowerCase());

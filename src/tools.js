@@ -1,11 +1,13 @@
 import { randomInt } from 'node:crypto';
+import { standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
 import { log } from './log.js';
+import { filmLine, listOf, neighbours, titled, whenDue } from './lookups.js';
 import { BASE_TAG, formatBytes, userTag } from './qbittorrent.js';
 import { describeContents, describePart, parseRelease, parseWanted, planShow } from './releases.js';
-import { createFinder } from './search.js';
+import { createFinder, splitQuery } from './search.js';
 import { infoHashOf } from './torrentfile.js';
 
 const SEARCH_TYPES = ['movie', 'tv', 'anime', 'music', 'book', 'game', 'software', 'any'];
@@ -29,6 +31,8 @@ const MAX_PLAN_TORRENTS = 200;
 const MAX_LISTED_DOWNLOADS = 20;
 // Searches that can turn up a film, which Plex may already have.
 const FILM_SEARCHES = new Set(['movie', 'anime', 'any']);
+// Searches that are for a film and nothing else, so the catalogue's word on which film is acted on.
+const SURELY_FILMS = new Set(['movie', 'anime']);
 const MAX_PLEX_LOOKUPS = 4;
 // How long "you already have this" stays said. Past that, PiRick says it again before fetching another copy.
 const PLEX_ANSWER_MS = 30 * 60 * 1000;
@@ -59,6 +63,12 @@ const SEARCH_DEFINITION = {
       required: ['query'],
     },
   },
+};
+
+// With a catalogue to go by, what kind of thing is wanted has to be said: a film is then looked up before it is searched for.
+const SEARCH_WITH_CATALOGUE = {
+  ...SEARCH_DEFINITION,
+  function: { ...SEARCH_DEFINITION.function, parameters: { ...SEARCH_DEFINITION.function.parameters, required: ['query', 'media_type'] } },
 };
 
 const FIND_SHOW_DEFINITION = {
@@ -195,7 +205,6 @@ export function differentReleasesNote(query, titles) {
   return `These results are from different years (${[...years].sort().join(', ')}), so they may be different films or shows with the same name. Unless the user already said which one they want, ask them before downloading.`;
 }
 
-const listOf = (items) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : String(items[0]));
 const episodeCount = (count) => `${count} episode${count === 1 ? '' : 's'}`;
 const filmLabel = (film) => (film.year ? `${film.title} (${film.year})` : film.title);
 /** "season 1 (10 episodes) and season 2 (8 episodes)", from what plex.show() reports. */
@@ -239,7 +248,7 @@ function createResultCache() {
   };
 }
 
-export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
+export function createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue }) {
   const cache = createResultCache();
   const finder = createFinder(jackett, config.jackett);
   let turnsStarted = 0;
@@ -258,15 +267,31 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
     }
   }
 
-  /** Notes that a tool result told this person that Plex already has something. */
-  function tellInPlex(user, turn, key) {
-    // Having been told, a plain "you already have it" is a complete answer.
-    turn.have = true;
+  /** What the catalogue says, or undefined when it is switched off or cannot be asked just now. */
+  async function askCatalogue(ask) {
+    if (!catalogue?.enabled) return undefined;
+    try {
+      return await ask();
+    } catch (err) {
+      log.warn('could not ask the catalogue', { error: describeError(err) });
+      return undefined;
+    }
+  }
+
+  /** Notes that a tool result told this person something they may want to answer, during this message of theirs. */
+  function tell(user, turn, key) {
     const id = `${user.id}|${key}`;
     if (answeredAboutPlex(user, turn, key)) return;
     toldInPlex.delete(id);
     toldInPlex.set(id, { at: Date.now(), turn: turn.id });
     if (toldInPlex.size > MAX_PLEX_TOLD) toldInPlex.delete(toldInPlex.keys().next().value);
+  }
+
+  /** Notes that a tool result told this person that Plex already has something. */
+  function tellInPlex(user, turn, key) {
+    // Having been told, a plain "you already have it" is a complete answer.
+    turn.have = true;
+    tell(user, turn, key);
   }
 
   /** True when this person was told in an earlier message, so by now they have said what they want. */
@@ -279,8 +304,25 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
    * Which of the films in some search results Plex already has: a map from
    * "title|year" (as parseRelease reads them) to the film in Plex. When nothing
    * that came back reads as a film, it goes by what was searched for, under "asked".
+   * When the catalogue has said which film is meant, Plex is asked for that one.
    */
-  async function filmsInPlex(query, contents) {
+  async function filmsInPlex(query, contents, film) {
+    if (film) {
+      let held;
+      // Plex may have it filed under its original title.
+      for (const name of [film.title, film.originalTitle].filter(Boolean)) {
+        [held] = await plex.films(name, film.year);
+        if (held) break;
+      }
+      const found = new Map();
+      if (!held) return found;
+      found.set('asked', held);
+      // The results are already known to be this film; only a copy dated otherwise is something else.
+      for (const parsed of contents) {
+        if (parsed.kind === 'movie' && parsed.keys[0] && (parsed.year == null || film.year == null || Math.abs(parsed.year - film.year) <= 1)) found.set(`${parsed.keys[0]}|${parsed.year}`, held);
+      }
+      return found;
+    }
     const wanted = new Map();
     for (const parsed of contents) {
       if (parsed.kind === 'movie' && parsed.keys[0]) wanted.set(`${parsed.keys[0]}|${parsed.year}`, parsed);
@@ -295,6 +337,84 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
       if (film) found.set(key, film);
     }
     return found;
+  }
+
+  /**
+   * What the catalogue makes of a search for a film. Resolves to one of:
+   *   undefined            nothing: the catalogue is off, cannot be asked, or this is not a search it can speak to
+   *   { output }           the whole answer, with no need to search: several films share the name, it is
+   *                        not out yet, or it is a show
+   *   { film, searchFor, says }   which film it is, what to search for instead, and what to tell the model
+   *   { says, unknown }    it knows no such film, and the search goes ahead as asked
+   *   { says }             only something to add: the search goes ahead as asked
+   *
+   * A search that does not say what kind of thing is wanted is most often for a
+   * film, so a film of exactly that name is acted on all the same; the model is
+   * told how to say it meant something else. A film whose name is only close
+   * is not, since it could as well be an album.
+   */
+  async function filmAsked(user, turn, query, mediaType) {
+    if (!catalogue?.enabled || !FILM_SEARCHES.has(mediaType)) return undefined;
+    const asked = splitQuery(query);
+    if (!asked.title || asked.episodes) return undefined;
+    const found = await askCatalogue(() => catalogue.findFilm({ title: asked.title, year: asked.year }));
+    if (!found) return undefined;
+    const sure = SURELY_FILMS.has(mediaType);
+    const named = `“${asked.title}”`;
+    const otherwise = sure ? '' : ' If the user is after something else of this name (an album, a book, a game), call search_media again with media_type set to that.';
+
+    if (found.none) {
+      const show = await askCatalogue(() => catalogue.findShow({ title: asked.title, year: asked.year }));
+      const exact = show && !show.none && !show.inexact ? (show.one ?? show.several[0]) : null;
+      if (!exact) return { says: [`The catalogue knows no film${sure ? '' : ' or show'} called ${named}.`], unknown: sure ? 'film' : 'film or show' };
+      const says = `The catalogue lists ${titled(exact)} as a TV show, not a film.`;
+      if (!sure) return { says: [`${says} If that is what the user wants, call find_show for it.`] };
+      turn.status(`Looked up ${named}: it is a TV show`, 'search');
+      return { output: { results: [], catalogue: says, note: 'Nothing was searched for. Call find_show for it instead.' } };
+    }
+    if (!sure && found.inexact) {
+      const films = found.one ? [found.one] : found.several;
+      return { says: [`The catalogue has ${films.length === 1 ? 'a film' : 'films'} with a name like this: ${films.map(titled).join('; ')}.`] };
+    }
+
+    const wrongYear = found.wrongYear ? `No film called ${named} is from ${asked.year}.` : '';
+    if (found.several) {
+      turn.status(`Looked up ${named}: ${found.several.length} films share that name`, 'search');
+      return {
+        output: {
+          results: [],
+          catalogue: [wrongYear, `${found.inexact ? 'These films have names like' : 'More than one film is called'} ${named}.`].filter(Boolean).join(' '),
+          which_one: found.several.map((film) => filmLine(film, { about: true })),
+          note: `Nothing was searched for yet. If what the user said settles which of these they mean (a year, a director, an actor), call search_media again with that title and its year. Otherwise ask the user which one, giving the years.${otherwise}`,
+        },
+      };
+    }
+
+    const film = found.one;
+    const dueKey = `due ${film.id}`;
+    if (standing(film) === 'due' && !answeredAboutPlex(user, turn, dueKey)) {
+      const when = whenDue(film);
+      tell(user, turn, dueKey);
+      // Saying it is not out yet is a complete answer.
+      turn.known = true;
+      turn.status(`Not searched for: ${titled(film)} is not out yet${when ? `, it is due ${when}` : ''}`, 'info');
+      return {
+        output: {
+          results: [],
+          catalogue: `${titled(film)} is not out yet. ${when ? `It is due ${when}.` : 'No date has been given for it.'}`,
+          note: `Nothing was searched for: anything offered under this name before it is out is a fake. Tell the user it is not out yet and when it is due. Search for it only if they then say they want it looked for anyway.${otherwise}`,
+        },
+      };
+    }
+
+    const says = [];
+    if (wrongYear) says.push(`${wrongYear} The film of that name is ${filmLine(film)}, and that is what was searched for.`);
+    else if (found.inexact) says.push(`Nothing is called ${named}. The nearest is ${filmLine(film)}, and that is what was searched for.`);
+    else says.push(`This is ${filmLine(film)}.`);
+    if (found.others) says.push(`${found.others === 1 ? 'One lesser-known film has' : `${found.others} lesser-known films have`} the same name.`);
+    if (neighbours(film)) says.push(neighbours(film));
+    if (wrongYear || found.inexact) turn.status(`Took ${named}${asked.year ? ` (${asked.year})` : ''} to be ${titled(film)}`, 'info');
+    return { film, searchFor: [film.title, film.year, ...asked.copy].filter(Boolean).join(' '), says };
   }
 
   // Searches can take a while behind a Cloudflare solver, so each one is announced.
@@ -474,7 +594,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
 
   const handlers = {
     async search_media(user, args, turn) {
-      const query = normaliseQuery(args.query);
+      let query = normaliseQuery(args.query);
       const mediaType = SEARCH_TYPES.includes(args.media_type) ? args.media_type : 'any';
       if (!query) return { error: 'A query is required.' };
 
@@ -487,16 +607,28 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
           note: 'You already ran this exact search in this turn. Use these results: call download with one of the ids, or answer the user.',
         };
       }
+      // What the catalogue makes of it, when there is one: which film is meant, or that there is nothing to search for.
+      const known = await filmAsked(user, turn, query, mediaType);
+      if (known?.output) {
+        turn.searches.set(searchKey, known.output);
+        return known.output;
+      }
+      const asked = query;
+      // A film the catalogue has named is searched for under its proper title and year, and failing that its original title.
+      const spellings = known?.film ? [known.searchFor, ...(known.film.originalTitle ? [[known.film.originalTitle, known.film.year].filter(Boolean).join(' ')] : [])] : [query];
       let found;
       let also;
       let exact;
       let foundAs;
       try {
-        // Searches other spellings too ("7 Chances" is released as "Seven.Chances") and
-        // drops results that are not about what was asked for.
-        ({ results: found, also, exact, foundAs } = await finder.search(query, TORZNAB_CATEGORIES[mediaType], { onTry: announce(turn) }));
+        for (query of spellings) {
+          // Searches other spellings too ("7 Chances" is released as "Seven.Chances") and
+          // drops results that are not about what was asked for.
+          ({ results: found, also, exact, foundAs } = await finder.search(query, TORZNAB_CATEGORIES[mediaType], { onTry: announce(turn) }));
+          if (exact && found.length) break;
+        }
       } catch (err) {
-        log.warn('search failed', { user: user.username, query, error: describeError(err) });
+        log.warn('search failed', { user: user.username, query: asked, error: describeError(err) });
         turn.status(`The search for “${query}” failed${detail(user, err)}`, 'error');
         return { error: 'The search service is not working right now. Tell the user to try again later or let the admin know.' };
       }
@@ -504,13 +636,13 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
       const shown = found.slice(0, config.searchLimit);
       const contents = shown.map((result) => parseRelease(result.title));
       // Undefined when Plex was not asked, which is not the same as Plex having nothing.
-      const films = FILM_SEARCHES.has(mediaType) ? await askPlex(() => filmsInPlex(query, contents)) : undefined;
+      const films = FILM_SEARCHES.has(mediaType) ? await askPlex(() => filmsInPlex(query, contents, known?.film)) : undefined;
       const filmOf = (parsed) => (parsed.kind === 'movie' ? films?.get(`${parsed.keys[0]}|${parsed.year}`) : undefined);
       const results = shown.map((result, i) => {
         const film = filmOf(contents[i]);
         if (film) tellInPlex(user, turn, `film ${film.id}`);
         return {
-          id: cache.put(user.id, film ? { ...result, inPlex: { key: `film ${film.id}`, label: filmLabel(film) } } : result),
+          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, names: known.film.names } }) }),
           title: result.title,
           kind: kindOf(result.categories),
           contains: describeContents(contents[i]),
@@ -526,7 +658,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
       let plexSays;
       if (held.length) plexSays = `Plex already has ${listOf(held)}. Which copy or quality it has is not known.`;
       else if (films && (mediaType !== 'any' || contents.some((parsed) => parsed.kind === 'movie'))) plexSays = 'Plex has no film with this title.';
-      log.info('search', { user: user.username, query, also, mediaType, results: results.length, exact });
+      log.info('search', { user: user.username, query: asked, ...(query !== asked && { searchedFor: query }), also, mediaType, results: results.length, exact });
       const count = results.length === 1 ? '1 result' : `${results.length} results`;
       const outcome = !results.length ? 'nothing found' : exact ? count : 'nothing that clearly matches';
       const others = also.length === 1 ? ' and 1 other spelling' : ` and ${also.length} other spellings`;
@@ -553,16 +685,25 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
       } else if (plexSays) {
         nextStep = `${nextStep} If the user only asked whether they have this, do not download: tell them they do not, and ask whether they would like it.`;
       }
+      // What the catalogue said comes first, since everything else is read in its light.
+      const catalogueSays = known?.says?.length ? { catalogue: known.says.join(' ') } : {};
       let output;
-      if (results.length) output = { ...(plexSays && { plex: plexSays }), results, ...(note && { note }), next_step: nextStep };
-      else if (held.length) output = { plex: plexSays, results: [], note: 'Nothing was found to download, but the user already has this in Plex. Tell them so.' };
-      else {
+      if (results.length) output = { ...catalogueSays, ...(plexSays && { plex: plexSays }), results, ...(note && { note }), next_step: nextStep };
+      else if (held.length) output = { ...catalogueSays, plex: plexSays, results: [], note: 'Nothing was found to download, but the user already has this in Plex. Tell them so.' };
+      else if (known?.unknown) {
+        output = { ...catalogueSays, ...(plexSays && { plex: plexSays }), results: [], note: `Nothing found, and the catalogue knows no ${known.unknown} of this name. Tell the user you could not find it and ask them to check the name. Do not search again under other spellings.` };
+      } else if (known?.film) {
+        output = { ...catalogueSays, ...(plexSays && { plex: plexSays }), results: [], note: 'The film exists, but no copy of it was found. Tell the user that. Do not search again under other spellings.' };
+      } else {
         output = {
+          ...catalogueSays,
           ...(plexSays && { plex: plexSays }),
           results: [],
           note: 'Nothing found. Search again with only the title and the year (no names of people, no extra words), or tell the user you could not find it.',
         };
       }
+      // With the catalogue's word that nothing of the name exists, or that what exists cannot be had, saying so is a complete answer.
+      if ((known?.unknown && (!results.length || !exact)) || (known?.film && !results.length)) turn.known = true;
       turn.searches.set(searchKey, output);
       return output;
     },
@@ -847,7 +988,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
 
   return {
     /** The tool definitions for one turn. They follow the libraries as they are now. */
-    definitions: () => [SEARCH_DEFINITION, FIND_SHOW_DEFINITION, downloadDefinition(settings.libraries()), LIST_DEFINITION],
+    definitions: () => [catalogue?.enabled ? SEARCH_WITH_CATALOGUE : SEARCH_DEFINITION, FIND_SHOW_DEFINITION, downloadDefinition(settings.libraries()), LIST_DEFINITION],
 
     /** What the tools record about one user message as the model works on it. */
     newTurn: (emit, status) => ({
@@ -861,6 +1002,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex }) {
       listed: false,
       // A tool result said that Plex already has what was asked about.
       have: false,
+      // The catalogue settled it: there is nothing to fetch, and saying so is a complete answer.
+      known: false,
       searches: new Map(),
       folderQuestions: new Set(),
     }),
