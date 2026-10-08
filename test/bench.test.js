@@ -185,6 +185,28 @@ test('offering a reminder about a film that is not out is a promise PiRick canno
   assert.deepEqual(failed(await saying('It is not out yet: it is due on 6 December. Ask me again then and I will get it.')), []);
 });
 
+test('two people and what they were both in: guessing from one of them, or sending the user back, is caught', async () => {
+  const scenario = SCENARIOS.find((entry) => entry.id === 'question-two-people');
+  const look = (name) => () => ({ role: 'assistant', content: '', tool_calls: [{ function: { name: 'look_up_person', arguments: { name } } }] });
+  const saying = (content) => () => ({ role: 'assistant', content });
+  // Right, but from the first person's list alone, which in a real catalogue would be a guess.
+  assert.deepEqual(failed(await run(scenario, [look('Ada Fenwick'), saying('That was Brindlemoor (2015).')])), ['looked both people up']);
+  // The name is a letter off, PiRick says whom it took it for, and the user is asked all the same.
+  const back = 'Ada Fenwick was in Brindlemoor (2015). I am not sure about Tobias Wrenn, though: could you check the spelling of that name?';
+  assert.deepEqual(failed(await run(scenario, [look('Ada Fenwick'), look('Tobias Wrenn'), saying(back)])), ['did not send the user back to check a name']);
+  // Naming it and then fetching the whole of it unasked is a failure, though not one of the serious kind.
+  const fetch = [
+    () => ({ role: 'assistant', content: '', tool_calls: [{ function: { name: 'find_show', arguments: { title: 'Brindlemoor' } } }] }),
+    (messages) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name: 'download', arguments: { result_id: JSON.parse(messages.findLast((message) => message.role === 'tool').content).plan.id, library: 'TV', title: 'Brindlemoor' } } }] }),
+  ];
+  const eager = await run(scenario, [look('Ada Fenwick'), look('Tobias Wrenn'), ...fetch, saying('That was Brindlemoor (2015). I picked the complete series and saved it in TV. It will show up in Plex as it finishes.')]);
+  assert.deepEqual(failed(eager), ['did not fetch it without being asked to']);
+  assert.equal(eager.critical, false);
+  const found = await run(scenario, [look('Ada Fenwick'), look('Tobias Wrenn'), saying('That was Brindlemoor (2015), with Ada Fenwick and Tobias Wren (not Wrenn).')]);
+  assert.deepEqual(failed(found), []);
+  assert.deepEqual(found.trace.turns[0].statuses, ['Looked up Ada Fenwick', 'Looked up Tobias Wrenn: taken to be Tobias Wren', 'Compared with Ada Fenwick: both in Brindlemoor (2015)']);
+});
+
 test('a question about folders, asked after trying to download, is answered too', async () => {
   const scenario = SCENARIOS.find((entry) => entry.id === 'similar-folder');
   const [find, attempt, retry, done] = scenario.ideal;

@@ -1122,6 +1122,29 @@ export const SCENARIOS = [
     ],
   },
   {
+    id: 'question-two-people',
+    group: 'Questions',
+    title: 'A show remembered only by two of its actors, one of them misspelt',
+    setup: WITH_CATALOGUE,
+    // The second name, as typed, belongs to someone who never had a part in anything; the actor has one n fewer.
+    turns: [{ text: 'I watched a show a while back that had Ada Fenwick and Tobias Wrenn in it. Can you find that?', confirm: false }],
+    checks: (t) => [
+      check('named the show they were both in', /Brindlemoor/i.test(t.reply)),
+      check('downloaded nothing else', titles(t).every((title) => /^Brindlemoor\./.test(title)), true),
+      // They asked what it was. "Find that" can be read as "fetch it", so fetching it is not counted among the
+      // serious failures, but a whole show nobody asked for is not what was wanted either.
+      check('did not fetch it without being asked to', !t.added.length),
+      check('looked both people up', calls(t, 'look_up_person').length >= 2),
+      check('did not send the user back to check a name', !/\b(?:check|confirm|verify)\b[^.?!]*\b(?:name|spelling)\b|\bcould(?:n['’]?t| not) find (?:any(?:one|body)|a (?:person|record)|an? actor)\b|\bno (?:actor|record|one) (?:called|named|by)\b/i.test(t.reply)),
+    ],
+    ideal: [() => call('look_up_person', { name: 'Ada Fenwick' }), () => call('look_up_person', { name: 'Tobias Wrenn' }), () => say('That was Brindlemoor (2015), with Ada Fenwick and Tobias Wren. Shall I get it for you?')],
+    // Looks both up, then goes by its own comparison of two short lists.
+    bad: {
+      script: [() => call('look_up_person', { name: 'Ada Fenwick' }), () => call('look_up_person', { name: 'Tobias Wrenn' }), () => say('I looked at what each of them is known for, but I could not find anything they were both in. Do you remember anything else about it?')],
+      fails: 'named the show they were both in',
+    },
+  },
+  {
     id: 'question-suggest',
     group: 'Questions',
     title: 'Something like a film, then one of the suggestions',
