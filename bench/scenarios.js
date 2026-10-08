@@ -152,6 +152,17 @@ const NOTES = [
   'Replaced the stuck download of “Copperhollow season 2” with 10 single episodes, all that could be found.',
   '“Charade (1963)” is stuck and no other copy could be found. PiRick will keep looking.',
 ];
+const PIRATE_TALK = /\b(?:arr+|matey|ahoy|aye|ye|cap['’]?n|captain|treasure|plunder|booty|sail\w*|seas?|ship\w*|hearties|aboard|landlubber|doubloons?)\b/i;
+// Two things for PiRick to pass on as new. They are written out here, and not read from PiRick's own
+// list (src/news.js), so that what is measured stays the same when that list grows.
+const NEW_THINGS = [
+  'PiRick has themes and personalities to choose from. Open Account to pick a theme, light or dark, and a personality.',
+  'PiRick can answer questions about films, shows and the people in them. Ask what something is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.',
+];
+const toldOfLooksAndVoices = (reply) => /\b(?:themes?|looks?|colou?rs?)\b/i.test(reply) && /\b(?:personalit(?:y|ies)|voices?|sounds?)\b/i.test(reply);
+const toldOfQuestions = (reply) => /\b(?:questions?|ask(?:ing)?)\b/i.test(reply) && /\b(?:films?|movies?|shows?)\b/i.test(reply);
+/** Named something PiRick was not said to do, of the kinds a model likes to add. What else it made up, only reading the reply shows. */
+const NOT_IN_THE_NEWS = /\b(?:subtitles?|trailers?|watch ?lists?|schedul\w+)\b|\bremind|\bnotif(?:y|ication)|\b(?:let you know|tell you|alert you|get back to you) (?:when|once|as soon as)\b/i;
 
 export const SCENARIOS = [
   // ---- Films -------------------------------------------------------------------
@@ -758,7 +769,7 @@ export const SCENARIOS = [
       got(t, 'the right film', [/^Charade\.1963\./]),
       check('said plainly what it got and where', /charade/i.test(t.reply) && /movies/i.test(t.reply)),
       check('kept it short', t.reply.length <= 600),
-      check('stayed in character', /\b(?:arr+|matey|ahoy|aye|ye|cap['’]?n|captain|treasure|plunder|booty|sail\w*|seas?|ship\w*|hearties|aboard|landlubber|doubloons?)\b/i.test(t.reply)),
+      check('stayed in character', PIRATE_TALK.test(t.reply)),
     ],
     ideal: film('Charade 1963', CHARADE, "Arr, matey! I've hauled Charade (1963) aboard in 1080p and stowed it in Movies. It'll surface in Plex when it finishes."),
   },
@@ -773,6 +784,49 @@ export const SCENARIOS = [
       check('five sentences at most', sentences(t.reply) <= 5 && t.reply.trim()),
     ],
     ideal: [() => say('Welcome back! Pioneer One season 1 episode 4 was stuck, so I swapped it for another copy. Copperhollow season 2 was stuck too and is now coming as 10 single episodes. Charade is still stuck, and I am still looking for another copy.')],
+  },
+  {
+    id: 'whats-new',
+    group: 'Voice',
+    title: 'Two new things in PiRick to tell of, with a pirate personality',
+    setup: { news: NEW_THINGS, personality: PIRATE },
+    turns: [{ comeBack: true }],
+    checks: (t) => [
+      check('told of the themes and personalities', toldOfLooksAndVoices(t.reply)),
+      check('said where they are chosen', /\baccount\b/i.test(t.reply)),
+      check('told of the questions it can answer', toldOfQuestions(t.reply)),
+      check('added nothing of its own', t.reply.trim() && !NOT_IN_THE_NEWS.test(t.reply)),
+      check('five sentences at most', sentences(t.reply) <= 5 && t.reply.trim()),
+      check('stayed in character', PIRATE_TALK.test(t.reply)),
+    ],
+    ideal: [() => say("Ahoy, matey, welcome back aboard! I've new colours and new voices: open Account to pick a theme, light or dark, and a personality. And ye can ask me about films and shows now: what one is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.")],
+    // Passes on one of the two, and adds a third that was never there.
+    bad: { script: [() => say('Ahoy, matey! Ye can pick a new theme and a personality under Account, and I can fetch subtitles for ye now.')], fails: 'added nothing of its own' },
+  },
+  {
+    id: 'welcome-back-with-news',
+    group: 'Voice',
+    title: 'Welcome-back summary of three looked-after downloads, with two new things to tell of',
+    setup: { notes: NOTES, news: NEW_THINGS },
+    turns: [{ comeBack: true }],
+    checks: (t) => [
+      check('mentioned all three downloads', /pioneer/i.test(t.reply) && /copperhollow/i.test(t.reply) && /charade/i.test(t.reply)),
+      check('told of both new things', toldOfLooksAndVoices(t.reply) && toldOfQuestions(t.reply)),
+      check('said where they are chosen', /\baccount\b/i.test(t.reply)),
+      check('added nothing of its own', t.reply.trim() && !NOT_IN_THE_NEWS.test(t.reply)),
+      check('eight sentences at most', sentences(t.reply) <= 8 && t.reply.trim()),
+    ],
+    ideal: [
+      () =>
+        say(
+          'Welcome back! Pioneer One season 1 episode 4 was stuck, so I swapped it for another copy. Copperhollow season 2 was stuck too and is now coming as 10 single episodes. Charade is still stuck, and I am still looking for another copy. Two things are new as well. I have themes and personalities now: open Account to pick a theme, light or dark, and a personality. And you can ask me about films and shows: what one is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.',
+        ),
+    ],
+    // The downloads are all there, and the news is left out.
+    bad: {
+      script: [() => say('Welcome back! Pioneer One season 1 episode 4 was stuck, so I swapped it for another copy. Copperhollow season 2 is now coming as 10 single episodes. Charade is still stuck.')],
+      fails: 'told of both new things',
+    },
   },
 
   // ---- With the catalogue ------------------------------------------------------
