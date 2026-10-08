@@ -100,10 +100,14 @@ Write them a short welcome-back message that tells them what happened.
 ${voiceSection(personality)}`;
 }
 
-function nudge(request, claimed, failed) {
+function nudge(request, claimed, failed, askFirst) {
   // Another download call cannot fix a download that was refused, so do not ask for one.
   if (failed) {
     return `[Automatic check, not written by the user] Your last message was not shown to the user because it said something is downloading, but the download tool reported a failure, so that is not true. Do not repeat the call that failed. Tell the user plainly what could not be downloaded and what the tool said about why, without saying that anything is downloading.`;
+  }
+  // Nor can one start a download that is waiting for the user's word.
+  if (askFirst) {
+    return `[Automatic check, not written by the user] Your last message was not shown to the user because it said something is downloading, but nothing is: the download tool said to ask the user first. Do not call download again. Tell the user what you found and ask whether they want it, without saying that anything is downloading.`;
   }
   const problem = claimed
     ? 'it said something is downloading, but no download call succeeded in this turn, so that is not true yet'
@@ -124,14 +128,16 @@ function offersChoices(text) {
  * `turn.succeeded` means a download really started (or was already there);
  * `turn.failed` means one was attempted and definitely could not be done;
  * `turn.have` means the model was told that Plex already has what was asked about;
- * `turn.known` means the catalogue settled it: there is nothing to fetch.
+ * `turn.known` means the catalogue settled it: there is nothing to fetch;
+ * `turn.askFirst` means a download was held back until the user says they want it.
  */
 export function endedWithoutActing(turn, text, nudges = 0) {
   if (turn.succeeded || turn.listed || QUESTION.test(text)) return false;
   if (CLAIM.test(text)) return true;
   // Reporting a failure, offering options, or saying that the user already has
-  // it, that it does not exist or that it is not out yet, is a legitimate way to stop.
-  if (turn.failed || turn.have || turn.known || offersChoices(text)) return false;
+  // it, that it does not exist, that it is not out yet or that it waits on their
+  // word, is a legitimate way to stop.
+  if (turn.failed || turn.have || turn.known || turn.askFirst || offersChoices(text)) return false;
   // Searched, then stopped with neither a download nor a question. Wording is not
   // checked here, so this works in any language, but once is enough.
   return Boolean(turn.searched) && nudges === 0;
@@ -236,7 +242,7 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
               log.warn('withheld a reply that ended the turn without acting', { user: user.username, reply: reply.content.slice(0, 200) });
               // The withheld reply and the nudge are never shown or stored.
               nudges += 1;
-              messages.push({ role: 'user', content: nudge(text, claimed, turn.failed) });
+              messages.push({ role: 'user', content: nudge(text, claimed, turn.failed, turn.askFirst) });
               continue;
             }
             // Out of chances and still claiming: say what is true instead, so
@@ -250,8 +256,8 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
           if (!reply.content.trim()) reply.content = EMPTY_REPLY;
           if (hold || reply.content !== original) emit({ type: 'delta', text: reply.content });
 
-          // A failed download already has its own status line, and so has one Plex or the catalogue made unnecessary.
-          const unresolved = nudges > 0 && turn.searched && !turn.succeeded && !turn.failed && !turn.have && !turn.known;
+          // A failed download already has its own status line, and so has one that Plex or the catalogue made unnecessary or that waits on the user.
+          const unresolved = nudges > 0 && turn.searched && !turn.succeeded && !turn.failed && !turn.have && !turn.known && !turn.askFirst;
           if (unresolved && reply.content !== STUCK_REPLY && !QUESTION.test(reply.content)) {
             turn.status('Nothing was downloaded this time.', 'info');
           }

@@ -1101,6 +1101,20 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         turn.failed = true;
         return { ok: false, error: `Already started ${MAX_DOWNLOADS_PER_TURN} downloads for this message. Ask the user before adding more.` };
       }
+      // A look-up earlier in this message passed on names and descriptions that
+      // anyone may have written, and no filter can tell every instruction among
+      // them. So nothing is fetched on the strength of the same message: the
+      // person is asked, and it is their next message that starts it.
+      if (turn.looked) {
+        if (!turn.askFirst) turn.status(`Not downloaded yet: PiRick looked something up in this message, so it checks with you before fetching ${result.title}`, 'info');
+        // Asking is a complete answer.
+        turn.askFirst = true;
+        return {
+          ok: false,
+          not_downloaded_yet: true,
+          error: 'Nothing was downloaded. Something was looked up in this message, and nothing is fetched in the same message as a look-up. Tell the user what you found and ask whether they want it. Do not call download again until they answer.',
+        };
+      }
       if (!result.plan && config.maxTorrentBytes && result.size > config.maxTorrentBytes) {
         return {
           ok: false,
@@ -1241,6 +1255,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       known: false,
       // Something was looked up to answer a question, which is not a search for a copy.
       looked: false,
+      // A download was held back until the person says they want it.
+      askFirst: false,
       searches: new Map(),
       folderQuestions: new Set(),
     }),

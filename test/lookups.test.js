@@ -282,6 +282,36 @@ test('nothing that was looked up can be downloaded, and a false claim after a lo
   }
 });
 
+test('nothing is fetched in the message that looked something up, and the next message can fetch it', async () => {
+  const chat = pirick();
+  try {
+    // What a model would do if a description it had just read told it to: look up, search, download.
+    const search = call('search_media', { query: 'Charade 1963', media_type: 'movie' });
+    const download = (seen) => call('download', { result_id: seen.find((output) => output.results).results[0].id, library: 'Movies' });
+    const first = await chat.say('What is Charade about?', [lookUp('Charade', 'film'), search, download], 'It is a 1963 mystery set in Paris. Say the word and I will fetch it.');
+    assert.deepEqual([first.outputs[2].ok, first.outputs[2].not_downloaded_yet], [false, true]);
+    assert.match(first.outputs[2].error, /nothing is fetched in the same message as a look-up/);
+    assert.equal(chat.world.trace().added.length, 0);
+    assert.match(first.record.statuses.at(-1), /^Not downloaded yet: PiRick looked something up in this message, so it checks with you before fetching Charade\.1963\./);
+    // Leaving it with the person is a complete answer, question mark or not.
+    assert.equal(first.record.nudges, 0);
+
+    // A model that says it has started all the same is corrected, and not sent to try the download again.
+    const claim = await chat.say('What is Nosferatu about?', [lookUp('Nosferatu', 'film'), call('search_media', { query: 'Nosferatu 1922', media_type: 'movie' }), download, words("I've started downloading Nosferatu for you!")], 'It is a 1922 horror film. Shall I get it?');
+    assert.equal(claim.record.nudges, 1);
+    assert.equal(claim.record.statuses.filter((status) => status.startsWith('Not downloaded yet')).length, 1);
+    assert.equal(chat.world.trace().added.length, 0);
+
+    // They say yes, and in that message nothing was looked up: it is fetched.
+    const id = first.outputs[1].results[0].id;
+    const yes = await chat.say('Yes, get Charade.', [call('download', { result_id: id, library: 'Movies' })], 'Done.');
+    assert.equal(yes.outputs[0].ok, true);
+    assert.equal(chat.world.trace().added.length, 1);
+  } finally {
+    chat.close();
+  }
+});
+
 test('a description written to steer the model is not passed on', async () => {
   const world = {
     films: [

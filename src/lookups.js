@@ -104,9 +104,10 @@ export function heldAgainst(held, guide) {
 //
 // Three tools answer questions from the catalogue: about one film or show, about
 // a person, and for ideas of what to watch. None of them searches for copies,
-// and none returns a download id, so a question cannot start a download by this
-// route. That is also why descriptions, which anyone may have written, are
-// passed on here and nowhere else.
+// and none returns a download id. That is why descriptions, which anyone may
+// have written, are passed on here and nowhere else. A model that took one for
+// an instruction could still go on to search and download, so each of these
+// sets `turn.looked`, and download starts nothing in a message where it is set.
 
 const MAX_SEASONS_LISTED = 12;
 const MAX_PLEX_MARKS = 15;
