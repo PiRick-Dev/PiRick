@@ -81,6 +81,18 @@ const SCHEMA = `
     mode        TEXT NOT NULL DEFAULT '',
     personality TEXT NOT NULL DEFAULT ''
   );
+
+  -- What is new in PiRick (see news.js): the entries this PiRick has had so far,
+  -- and who has still to be told of each. A row in news_owed goes once its
+  -- person has been told.
+  CREATE TABLE IF NOT EXISTS news_arrived (
+    entry INTEGER PRIMARY KEY
+  );
+  CREATE TABLE IF NOT EXISTS news_owed (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entry   INTEGER NOT NULL,
+    PRIMARY KEY (user_id, entry)
+  );
 `;
 
 export function openDb(file) {

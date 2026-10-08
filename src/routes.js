@@ -247,7 +247,7 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
     }
   });
 
-  // Called when someone opens the chat: tells them what upkeep did while they were away.
+  // Called when someone opens the chat: tells them what upkeep did while they were away, and what is new in PiRick.
   api.post('/chat/catch-up', async (req, res) => {
     const stream = openStream(res);
     // Skipped while a message is being answered; it is offered again next time.
