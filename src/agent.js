@@ -1,4 +1,5 @@
 import { log } from './log.js';
+import { wordForNumber } from './words.js';
 
 const MAX_TOOL_STEPS = 8;
 const MAX_NUDGES = 2;
@@ -90,9 +91,13 @@ How you talk:
 ${voiceSection(personality)}`;
 }
 
-// `downloads` and `news` say which of the two there is to tell. With no news
+// `downloads` and `news` say how many of each there are to tell. With no news
 // the prompt is as it always was.
 function catchUpPrompt(user, personality, downloads, news) {
+  // Room for a sentence about each download and two about each new thing, what it is and how to use it,
+  // with a greeting and a goodbye. Asked for fewer, a model has to run sentences together to fit.
+  const most = 2 + downloads + 2 * news;
+  const sentences = `${wordForNumber(most) ?? most} sentences at most`;
   const opening = `You are PiRick, an assistant that looks after downloads for a home Plex server. ${user.username} has just come back.`;
   const tellNews = `every new thing in the list and how to use it. PiRick in the list is you, so say "I".`;
   if (!news) {
@@ -110,7 +115,7 @@ ${voiceSection(personality)}`;
 Write them a short welcome-back message that tells them what is new.
 - Tell them ${tellNews}
 - Use only what the list says. Do not add features, steps, examples, promises or anything else that is not in it.
-- Plain text, five sentences at most, no headings.
+- Plain text, ${sentences}, no headings.
 ${voiceSection(personality)}`;
   }
   return `${opening} While they were away you checked on their downloads and you were updated. The notes you are given say exactly what happened to their downloads, and the list after them says exactly what is new.
@@ -119,7 +124,7 @@ Write them a short welcome-back message that tells them both.
 - Mention every item in the notes by name and say plainly what happened to it.
 - Then tell them ${tellNews}
 - Use only what the notes and the list say. Do not add downloads, progress, features, steps, promises or anything else that is not in them.
-- Plain text, eight sentences at most, no headings.
+- Plain text, ${sentences}, no headings.
 ${voiceSection(personality)}`;
 }
 
@@ -198,9 +203,12 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
       try {
         const reply = await ollama.chat({
           messages: [
-            { role: 'system', content: catchUpPrompt(user, settings.personalityFor(user.id), notes.length > 0, added.length > 0) },
+            { role: 'system', content: catchUpPrompt(user, settings.personalityFor(user.id), notes.length, added.length) },
             { role: 'user', content: [listed('Notes', notes), listed('New in PiRick', added)].filter(Boolean).join('\n\n') },
           ],
+          // Retelling a list calls for no reasoning, and given the chance a thinking model spends a minute or
+          // two counting its sentences, now and then until it has no room left to write any. Without, a second.
+          think: false,
           onDelta: (delta) => {
             summary += delta;
             emit({ type: 'delta', text: delta });

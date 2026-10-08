@@ -28,7 +28,8 @@ async function errorText(res) {
 const toMs = (nanoseconds) => Math.round((nanoseconds ?? 0) / 1e6);
 
 /**
- * `config.think` and `config.seed` are passed to Ollama when set. `onUsage`
+ * `config.think` and `config.seed` are passed to Ollama when set, and one
+ * call may say for itself whether the model is to think. `onUsage`
  * is told what each reply cost: the token counts and timings Ollama reports.
  */
 export function createOllama(config, { onUsage } = {}) {
@@ -48,12 +49,12 @@ export function createOllama(config, { onUsage } = {}) {
      * Runs one model turn. Reply text is passed to `onDelta` as it arrives; the
      * resolved value is the complete assistant message, including any tool calls.
      */
-    async chat({ messages, tools, onDelta }) {
+    async chat({ messages, tools, onDelta, think = config.think }) {
       const options = { num_ctx: config.numCtx, temperature: 0.2 };
       if (config.seed != null) options.seed = config.seed;
       const body = { model: config.model, messages, stream: true, options };
       // Left out, a thinking model decides for itself, which usually means it thinks.
-      if (config.think != null) body.think = config.think;
+      if (think != null) body.think = think;
       if (tools?.length) body.tools = tools;
       if (config.keepAlive) body.keep_alive = config.keepAlive;
 
@@ -71,7 +72,7 @@ export function createOllama(config, { onUsage } = {}) {
           throw new UpstreamError('ollama', `Model "${config.model}" cannot call tools; set OLLAMA_MODEL to one that can`);
         }
         if (/does not support thinking|think value/i.test(reason)) {
-          throw new UpstreamError('ollama', `Model "${config.model}" does not accept OLLAMA_THINK=${config.think}; clear it or use a value the model supports`);
+          throw new UpstreamError('ollama', `Model "${config.model}" does not accept OLLAMA_THINK=${think}; clear it or use a value the model supports`);
         }
         throw new UpstreamError('ollama', `Ollama returned HTTP ${res.status}: ${reason.slice(0, 300)}`);
       }

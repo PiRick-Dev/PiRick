@@ -142,6 +142,8 @@ test('someone who comes back after an update is told what is new: plain lines, t
     assert.equal(tools, undefined, 'the summary cannot do anything, only speak');
     assert.match(messages[0].content, /alice has just come back\. While they were away you were updated, and the list you are given says exactly what is new\./);
     assert.match(messages[0].content, /Do not add features, steps, examples, promises or anything else that is not in it\./);
+    // Two sentences for each new thing, a greeting and a goodbye.
+    assert.match(messages[0].content, /- Plain text, six sentences at most, no headings\./);
     assert.match(messages[0].content, /You are a cheerful pirate captain\./);
     assert.equal(messages[1].content, 'New in PiRick:\n- PiRick has themes.\n- PiRick answers questions.');
 
@@ -164,7 +166,8 @@ test('download notes and news come in one message, each under its own heading', 
     const [{ messages }] = asked;
     assert.match(messages[0].content, /you checked on their downloads and you were updated\./);
     assert.match(messages[0].content, /Mention every item in the notes by name[^\n]+\n- Then tell them every new thing in the list and how to use it\./);
-    assert.match(messages[0].content, /eight sentences at most/);
+    // A sentence for the one download, two for the one new thing, and a greeting and a goodbye.
+    assert.match(messages[0].content, /- Plain text, five sentences at most, no headings\./);
     assert.equal(messages[1].content, 'Notes:\n- “Sintel” has finished downloading.\n\nNew in PiRick:\n- PiRick has themes.');
     assert.deepEqual((await world.comeBack()).statuses, []);
   } finally {

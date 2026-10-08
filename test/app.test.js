@@ -918,6 +918,9 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   const asked = seen.ollama.at(-1);
   assert.equal(asked.tools, undefined, 'the summary cannot do anything, only speak');
   assert.match(asked.messages[1].content, /^Notes:\n- Replaced the stuck download of “Packshow \(S01E03\)”/);
+  // It is written without thinking, which a request for a film is left free to do.
+  assert.equal(asked.think, false);
+  assert.ok(seen.ollama.filter((body) => !body.messages[0].content.includes('has just come back')).every((body) => !('think' in body)));
 
   // It is in the chat history, and it is only said once.
   const history = (await getJson('/api/chat')).messages;
