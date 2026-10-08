@@ -9,6 +9,7 @@ import { createConversation } from '../src/conversation.js';
 import { openDb } from '../src/db.js';
 import { UpstreamError, describeError } from '../src/errors.js';
 import { hashFromMagnet } from '../src/jackett.js';
+import { createNews } from '../src/news.js';
 import { createPlex } from '../src/plex.js';
 import { BASE_TAG, toDownload, userTag } from '../src/qbittorrent.js';
 import { createSettings } from '../src/settings.js';
@@ -53,7 +54,9 @@ const MARKUP = /^\s*#{1,6}\s|^\s*\|.*\|\s*$|\]\(https?:/m;
  *   failAdds     qBittorrent refuses every new download
  *   personality  the admin's personality text
  *   notes        what upkeep did while the user was away
- *   plex         connects a Plex server that already has { films: [{ title, year }],
+ *   news         what is new in PiRick since the user was last told, as sentences
+ *                like those in its own list (src/news.js)
+ *   plex       connects a Plex server that already has { films: [{ title, year }],
  *                shows: [{ title, year, seasons: { 1: 10 } }] }. Without it PiRick
  *                runs with no Plex, as it does when none is set up
  *   folders      folders on disk besides the usual ones: { '/media/TV': ['Name'] }
@@ -180,7 +183,13 @@ export function createWorld(setup = {}, connect, using = {}) {
       return reply;
     },
   };
-  const agent = createAgent({ ollama, tools, conversation: createConversation(db), settings, upkeep, plex, catalogue });
+  // The scenario's own news and never PiRick's, so that no run shifts when PiRick's list grows.
+  const news = createNews({
+    db,
+    has: () => ({ catalogue: catalogue.enabled, personalities: settings.personalities().length > 0 }),
+    entries: (setup.news ?? []).map((text, i) => ({ id: i + 1, text })),
+  });
+  const agent = createAgent({ ollama, tools, conversation: createConversation(db), settings, upkeep, plex, catalogue, news });
 
   /** A new request from the user. Everything PiRick does about it is recorded in one place. */
   function begin(text) {

@@ -938,6 +938,30 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== album.hash);
 });
 
+test('after an update, whoever was already here is told what is new when they open the chat', async () => {
+  const catchUp = async () => (await (await request('/api/chat/catch-up', { method: 'POST' })).text()).trim().split('\n').map((line) => JSON.parse(line));
+  // This PiRick started with nobody in it, so its admin is owed nothing.
+  assert.deepEqual(await catchUp(), [{ type: 'done' }]);
+
+  // As an update leaves it: the admin was here before the themes, the personalities and the catalogue's answers were.
+  const { id } = database.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+  for (const entry of [1, 2]) database.prepare('INSERT INTO news_owed (user_id, entry) VALUES (?, ?)').run(id, entry);
+  const events = await catchUp();
+  // The catalogue is switched off here, so its news is kept back.
+  assert.deepEqual(events.filter((event) => event.type === 'status'), [
+    { type: 'status', kind: 'info', text: 'New: PiRick has themes and personalities to choose from. Open Account to pick a theme, light or dark, and a personality.' },
+  ]);
+  const asked = seen.ollama.at(-1);
+  assert.equal(asked.tools, undefined);
+  assert.match(asked.messages[0].content, /While they were away you were updated/);
+  assert.equal(asked.messages[1].content, 'New in PiRick:\n- PiRick has themes and personalities to choose from. Open Account to pick a theme, light or dark, and a personality.');
+
+  // Told once, and kept in the chat like any other welcome back.
+  assert.deepEqual(await catchUp(), [{ type: 'done' }]);
+  assert.deepEqual((await getJson('/api/chat')).messages.slice(-2).map((item) => item.type), ['status', 'assistant']);
+  assert.deepEqual(database.prepare('SELECT entry FROM news_owed WHERE user_id = ?').all(id).map((row) => row.entry), [2]);
+});
+
 test('an admin can see which build is running, when it is a published one', async () => {
   // The image GitHub builds carries its commit and the time it was built.
   const published = loadConfig({ PIRICK_COMMIT: '0123456789ABCDEF0123456789abcdef01234567', PIRICK_BUILT: '2026-10-05T18:30:00Z' });

@@ -90,14 +90,44 @@ How you talk:
 ${voiceSection(personality)}`;
 }
 
-function catchUpPrompt(user, personality) {
-  return `You are PiRick, an assistant that looks after downloads for a home Plex server. ${user.username} has just come back. While they were away you checked on their downloads, and the notes you are given say exactly what happened.
+// `downloads` and `news` say which of the two there is to tell. With no news
+// the prompt is as it always was.
+function catchUpPrompt(user, personality, downloads, news) {
+  const opening = `You are PiRick, an assistant that looks after downloads for a home Plex server. ${user.username} has just come back.`;
+  const tellNews = `every new thing in the list and how to use it. PiRick in the list is you, so say "I".`;
+  if (!news) {
+    return `${opening} While they were away you checked on their downloads, and the notes you are given say exactly what happened.
 
 Write them a short welcome-back message that tells them what happened.
 - Mention every item in the notes by name and say plainly what happened to it.
 - Use only what the notes say. Do not add downloads, progress, promises or anything else that is not in them.
 - Plain text, five sentences at most, no headings.
 ${voiceSection(personality)}`;
+  }
+  if (!downloads) {
+    return `${opening} While they were away you were updated, and the list you are given says exactly what is new.
+
+Write them a short welcome-back message that tells them what is new.
+- Tell them ${tellNews}
+- Use only what the list says. Do not add features, steps, examples, promises or anything else that is not in it.
+- Plain text, five sentences at most, no headings.
+${voiceSection(personality)}`;
+  }
+  return `${opening} While they were away you checked on their downloads and you were updated. The notes you are given say exactly what happened to their downloads, and the list after them says exactly what is new.
+
+Write them a short welcome-back message that tells them both.
+- Mention every item in the notes by name and say plainly what happened to it.
+- Then tell them ${tellNews}
+- Use only what the notes and the list say. Do not add downloads, progress, features, steps, promises or anything else that is not in them.
+- Plain text, eight sentences at most, no headings.
+${voiceSection(personality)}`;
+}
+
+// What stands in for the summary when the model gives none.
+function plainCatchUp(downloads, news) {
+  if (!news) return 'Welcome back! I looked after your downloads while you were away; the notes above say what changed.';
+  if (!downloads) return 'Welcome back! I have something new for you; the notes above say what.';
+  return 'Welcome back! I looked after your downloads while you were away, and I have something new for you; the notes above say what.';
 }
 
 function nudge(request, claimed, failed, askFirst) {
@@ -143,29 +173,33 @@ export function endedWithoutActing(turn, text, nudges = 0) {
   return Boolean(turn.searched) && nudges === 0;
 }
 
-export function createAgent({ ollama, tools, conversation, settings, upkeep, plex, catalogue }) {
+export function createAgent({ ollama, tools, conversation, settings, upkeep, plex, catalogue, news }) {
   return {
     /**
-     * Tells a returning user what upkeep did for them while they were away:
-     * the plain facts as status lines, then a short summary in PiRick's voice.
-     * Resolves to false when there was nothing to tell.
+     * Tells a returning user what upkeep did for them while they were away,
+     * and what is new in PiRick since they were last told: the plain facts as
+     * status lines, then a short summary in PiRick's voice. Resolves to false
+     * when there was nothing to tell.
      */
     async catchUp(user, emit) {
       const events = upkeep.unseen(user.username);
-      if (!events.length) return false;
+      const unheard = news?.unheard(user) ?? [];
+      if (!events.length && !unheard.length) return false;
       const notes = events.slice(0, MAX_CATCH_UP_NOTES).map((event) => event.detail);
       if (events.length > notes.length) notes.push(`${events.length - notes.length} more downloads were looked after as well.`);
+      const added = unheard.map((entry) => entry.text);
       // These lines are the reliable record; the summary that follows is the colour.
-      const statuses = notes.map((text) => ({ role: 'status', text, kind: 'info' }));
+      const statuses = [...notes, ...added.map((text) => `New: ${text}`)].map((text) => ({ role: 'status', text, kind: 'info' }));
       for (const { text, kind } of statuses) emit({ type: 'status', text, kind });
       emit({ type: 'working', text: 'Catching you up…' });
 
+      const listed = (heading, lines) => (lines.length ? `${heading}:\n${lines.map((text) => `- ${text}`).join('\n')}` : '');
       let summary = '';
       try {
         const reply = await ollama.chat({
           messages: [
-            { role: 'system', content: catchUpPrompt(user, settings.personalityFor(user.id)) },
-            { role: 'user', content: `Notes:\n${notes.map((text) => `- ${text}`).join('\n')}` },
+            { role: 'system', content: catchUpPrompt(user, settings.personalityFor(user.id), notes.length > 0, added.length > 0) },
+            { role: 'user', content: [listed('Notes', notes), listed('New in PiRick', added)].filter(Boolean).join('\n\n') },
           ],
           onDelta: (delta) => {
             summary += delta;
@@ -177,13 +211,14 @@ export function createAgent({ ollama, tools, conversation, settings, upkeep, ple
         log.warn('catch-up summary failed', { user: user.username, error: err?.message ?? String(err) });
       }
       if (!summary.trim()) {
-        summary = 'Welcome back! I looked after your downloads while you were away; the notes above say what changed.';
+        summary = plainCatchUp(notes.length > 0, added.length > 0);
         emit({ type: 'delta', text: summary });
       }
       // An aside is shown in the chat but kept out of what the model is later told
       // it said, so "I replaced…" never becomes a pattern to imitate without tools.
       conversation.append(user.id, [...statuses, { role: 'aside', content: summary }]);
       upkeep.markSeen(events.map((event) => event.id));
+      news?.heard(user, unheard.map((entry) => entry.id));
       return true;
     },
 

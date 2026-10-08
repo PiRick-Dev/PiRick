@@ -191,7 +191,7 @@ async function send(text) {
   if (!matchMedia('(pointer: coarse)').matches) input.focus();
 }
 
-// When someone comes back, PiRick says what it did to their downloads meanwhile.
+// When someone comes back, PiRick says what it did to their downloads meanwhile, and what is new in it.
 const CATCH_UP_EVERY_MS = 5 * 60 * 1000;
 let lastCatchUp = 0;
 async function catchUp() {

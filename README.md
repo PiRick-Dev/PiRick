@@ -77,6 +77,7 @@ On Linux, Ollama listens only on `127.0.0.1` by default, where containers cannot
 `docker-compose.yml` runs `ghcr.io/pirick-dev/pirick:latest`. GitHub builds that image from the `main` branch, for x86-64 and ARM64, each time something is merged into it.
 
 - **Updating.** `docker compose pull`, then `docker compose up -d`. Accounts, libraries and chat history live in the `pirick-data` volume and are kept.
+- **What people are told.** When an update brings something people would notice, PiRick tells each of them once, the next time they open the chat: a grey line for each new thing, which is the reliable record, then a few words in PiRick's own voice, in whichever personality that person has chosen. Only people who had an account before the update are told. Someone added later finds PiRick as it is. News of something that is switched off, such as the catalogue, waits until it is switched on. At most three things are told at a time, and the rest the next time.
 - **Staying on one build.** Every build is also tagged with its commit, for example `ghcr.io/pirick-dev/pirick:sha-1a2b3c4`. Put such a tag in `image:` to stop getting updates, or to go back to an earlier build. The tags are listed under **Packages** on the repository's page, and the foot of **Admin > Connections** shows the one you are running and when it was built.
 - **Dockge, Portainer and other stack managers.** Paste `docker-compose.yml` in as the stack and put your settings in the stack's `.env` (Dockge has a box for it next to the compose file). A new instance starts with an empty database: its first-run admin password is in the stack's log, and libraries and people have to be added again.
 - **Your own build.** `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` builds from this folder instead of downloading. To run your build on another machine, push it to a registry of your own and change `image:` to match. With a private registry, the Docker client that runs Compose has to be logged in. Dockge runs its own client inside its container, so a login on the host does not count and the pull fails with `no basic auth credentials`: run `docker exec -it <dockge container> docker login <registry>`, and again whenever that container is recreated.
@@ -465,7 +466,7 @@ docker compose exec pirick node src/cli.js reset-password <username>
 
 This prints a new password and signs that person out everywhere.
 
-The database (accounts and what each person has chosen, sessions, chat history, libraries, personalities and upkeep records) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
+The database (accounts and what each person has chosen, sessions, chat history, libraries, personalities, upkeep records and what each person has still to be told is new) is one SQLite file in the `pirick-data` volume. To back it up, stop PiRick and copy the volume.
 
 ## Troubleshooting
 
@@ -527,6 +528,7 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
 | `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, and replacing the ones that are stuck |
+| `src/news.js` | What is new in PiRick, and who has still to be told. A change people would notice gets an entry here, written for them |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
 | `src/settings.js`, `src/folders.js` | Libraries, personalities and each person's choices; folder naming, matching and checks |
 | `src/themes.js` | The list of themes. Their colours and pictures are in `web/static/style.css` and the two pages |
