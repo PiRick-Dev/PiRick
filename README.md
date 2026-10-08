@@ -216,6 +216,7 @@ Things to know:
 - Plex knows which episodes it has, not how many a season should have. PiRick reports the number and leaves the judgement to you. For a whole show it takes every season before the last one you have to be complete, and looks for single episodes missing from that last one. With the catalogue on, PiRick knows how many there should be, and none of this guessing is needed.
 - Films and shows are matched by title and year. Capitals, punctuation and numbers written as words do not matter, but something filed in Plex under a quite different name is not recognised and may be fetched again.
 - Music and books are not checked against Plex.
+- PiRick asks Plex with the server's own token, so what it says someone already has is drawn from every film and show library on the server. That includes a library you have not shared with that person in Plex: anyone with a PiRick account can find out whether a title is in it.
 - If Plex is down when someone asks for something, PiRick carries on as it does without Plex.
 - Use an `http://` address on your own network. If Plex is set to require secure connections (Settings > Network), that is refused: set it to "Preferred".
 
