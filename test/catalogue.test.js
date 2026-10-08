@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 process.env.LOG_LEVEL = 'error';
 
 const { build } = await import('../src/build.js');
-const { GENRES, MAX_CHOICES, cleanAbout, cleanName, countryName, createCatalogue, likeness, nameKey, pick, sayDate, splitCountry, standing, withoutDescription } = await import('../src/catalogue.js');
+const { GENRES, MAX_CHOICES, cleanAbout, cleanName, countryName, createCatalogue, likeness, nameKey, pick, sayDate, slimEntity, splitCountry, standing, withoutDescription } = await import('../src/catalogue.js');
 const { loadConfig } = await import('../src/config.js');
 const { UpstreamError } = await import('../src/errors.js');
 const { SERVICES, catalogueStandIn } = await import('../bench/catalogue.js');
@@ -174,6 +174,45 @@ test('answers are kept for a while, so asking again costs nothing', async () => 
   const before = server.requests.length;
   await catalogue.findFilm({ title: 'Nosferatu' });
   assert.ok(server.requests.length > before);
+});
+
+test('an entry is kept without the statements PiRick never reads', () => {
+  // As Wikidata sends a statement: the value, and around it far more that says where the value came from.
+  const statement = (value, rank = 'normal') => ({
+    id: 'Q1$0001',
+    type: 'statement',
+    rank,
+    mainsnak: { snaktype: 'value', property: 'P0', hash: 'abc', datatype: 'wikibase-item', datavalue: { type: 'wikibase-entityid', value } },
+    qualifiers: { P453: [{ snaktype: 'value', datavalue: { value: 'x'.repeat(2000) } }] },
+    references: [{ hash: 'def', snaks: { P248: [{ snaktype: 'value', datavalue: { value: 'y'.repeat(2000) } }] } }],
+  });
+  const entity = {
+    id: 'Q1',
+    type: 'item',
+    lastrevid: 12345,
+    modified: '2026-01-01T00:00:00Z',
+    labels: { en: { language: 'en', value: 'Seven Chances' } },
+    aliases: { en: [{ language: 'en', value: '7 Chances' }] },
+    descriptions: { en: { language: 'en', value: '1925 film directed by Buster Keaton' } },
+    sitelinks: { enwiki: { site: 'enwiki', title: 'Seven Chances', badges: [], url: 'https://en.wikipedia.org/wiki/Seven_Chances' }, dewiki: { site: 'dewiki', title: 'Sieben Chancen', badges: [] } },
+    claims: {
+      // Read: who directed it and when it came out.
+      P57: [statement({ id: 'Q2' })],
+      P577: [statement({ time: '+1925-03-11T00:00:00Z', precision: 11 }, 'preferred')],
+      // Never read: its poster and its running time.
+      P18: [statement('Seven Chances poster.jpg')],
+      P2047: [statement({ amount: '+56', unit: 'minute' })],
+    },
+  };
+  const kept = slimEntity(entity);
+  assert.deepEqual(Object.keys(kept.claims), ['P57', 'P577']);
+  assert.deepEqual(kept.claims.P577, [{ rank: 'preferred', mainsnak: { snaktype: 'value', datavalue: { value: { time: '+1925-03-11T00:00:00Z', precision: 11 } } } }]);
+  // Site links are only ever counted, apart from the English Wikipedia page.
+  assert.deepEqual(kept.sitelinks, { enwiki: { title: 'Seven Chances' }, dewiki: {} });
+  assert.deepEqual([kept.id, kept.labels, kept.aliases, kept.descriptions], [entity.id, entity.labels, entity.aliases, entity.descriptions]);
+  assert.ok(JSON.stringify(kept).length * 10 < JSON.stringify(entity).length, 'a tenth the size or less');
+  // Asked for without statements or site links, it is kept without them.
+  assert.deepEqual(Object.keys(slimEntity({ id: 'Q3', labels: {}, descriptions: {} })), ['id', 'labels', 'aliases', 'descriptions']);
 });
 
 test('the admin screen shows the catalogue switched on or off', async () => {

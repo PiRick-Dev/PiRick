@@ -322,6 +322,29 @@ function claimsOf(entity, property) {
   const preferred = claims.filter((claim) => claim.rank === 'preferred');
   return preferred.length ? preferred : claims;
 }
+const STATEMENTS_READ = new Set(Object.values(P));
+/**
+ * An entity cut down to what is read from it. A well-known film's entry runs
+ * to hundreds of kilobytes, nearly all of it statements PiRick never looks
+ * at, and a thousand answers are kept at a time. Of its site links only how
+ * many there are and the English Wikipedia page are used.
+ */
+export function slimEntity(entity) {
+  const claims = {};
+  for (const [property, list] of Object.entries(entity.claims ?? {})) {
+    if (!STATEMENTS_READ.has(property)) continue;
+    claims[property] = list.map((claim) => ({ rank: claim.rank, mainsnak: { snaktype: claim.mainsnak?.snaktype, datavalue: { value: claim.mainsnak?.datavalue?.value } } }));
+  }
+  const sitelinks = Object.fromEntries(Object.entries(entity.sitelinks ?? {}).map(([site, link]) => [site, site === 'enwiki' ? { title: link?.title } : {}]));
+  return {
+    id: entity.id,
+    labels: entity.labels,
+    aliases: entity.aliases,
+    descriptions: entity.descriptions,
+    ...(entity.sitelinks && { sitelinks }),
+    ...(entity.claims && { claims }),
+  };
+}
 const idsOf = (entity, property) => claimsOf(entity, property).map((claim) => claim.mainsnak.datavalue?.value?.id).filter(Boolean);
 const textsOf = (entity, property) => claimsOf(entity, property).map((claim) => claim.mainsnak.datavalue?.value).map((value) => (typeof value === 'string' ? value : value?.text)).filter(Boolean);
 
@@ -578,7 +601,7 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     for (let i = 0; i < missing.length; i += 50) {
       const data = await wikidata({ action: 'wbgetentities', ids: missing.slice(i, i + 50).join('|'), props: parts, languages: 'en' });
       for (const entity of Object.values(data?.entities ?? {})) {
-        if (entity?.id && entity.missing === undefined) found.set(entity.id, keep(`entity ${parts} ${entity.id}`, entity));
+        if (entity?.id && entity.missing === undefined) found.set(entity.id, keep(`entity ${parts} ${entity.id}`, slimEntity(entity)));
       }
     }
     return new Map(wanted.filter((id) => found.has(id)).map((id) => [id, found.get(id)]));
@@ -634,13 +657,14 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
           Object.assign(found, { year: year ?? found.year, date, firm: true });
         }
       },
-      /** A film's names in every language. */
-      async otherKeys(found) {
-        const data = await remembered(`names ${found.id}`, DETAILS_FRESH_MS, () => wikidata({ action: 'wbgetentities', ids: found.id, props: 'labels|aliases' }));
-        const entity = data?.entities?.[found.id];
-        const names = [...Object.values(entity?.labels ?? {}).map((label) => label.value), ...Object.values(entity?.aliases ?? {}).flatMap((list) => list.map((alias) => alias.value))];
-        return keysOf(names.slice(0, MAX_OTHER_NAMES).map(cleanName));
-      },
+      /** A film's names in every language. What is kept is the names as compared, not the answer they came in. */
+      otherKeys: (found) =>
+        remembered(`names ${found.id}`, DETAILS_FRESH_MS, async () => {
+          const data = await wikidata({ action: 'wbgetentities', ids: found.id, props: 'labels|aliases' });
+          const entity = data?.entities?.[found.id];
+          const names = [...Object.values(entity?.labels ?? {}).map((label) => label.value), ...Object.values(entity?.aliases ?? {}).flatMap((list) => list.map((alias) => alias.value))];
+          return keysOf(names.slice(0, MAX_OTHER_NAMES).map(cleanName));
+        }),
       /** For a name that found nothing: the same words with a letter or two allowed to differ, and lastly anything described as a film. */
       async loosely(words) {
         const roughly = (list) => list.map((word) => (word.length >= 4 ? `${word}~` : word)).join(' ');
