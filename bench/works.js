@@ -69,5 +69,7 @@ export const WORLD = {
     { id: 110, name: 'Starfall Courier', akas: ['Hoshifuru Haitatsunin'], year: 2021, weight: 55, country: 'JP', type: 'Animation', language: 'Japanese', seasons: { 1: 12, 2: 12 }, genres: ['science fiction'] },
     { id: 111, name: 'Minato no Mirelle', akas: ['Mirelle of the Harbor'], year: 2019, weight: 30, country: 'JP', type: 'Animation', language: 'Japanese', seasons: { 1: 12 }, genres: ['adventure'] },
   ],
+  // Someone who never had a part in anything, and whose name is one letter from an actor's.
+  people: [{ name: 'Tobias Wrenn', about: 'English clockmaker (1790–1858)', known: 6 }],
   mostRead: ['Metropolis', 'Buster Keaton', 'Copperhollow', 'Nosferatu', 'Night of the Living Dead', 'Brindlemoor', 'Big Buck Bunny'],
 };

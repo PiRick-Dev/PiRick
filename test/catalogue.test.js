@@ -637,6 +637,72 @@ test('a person is found by name, with what they are known for', async () => {
   assert.equal(await catalogue.person('Nosferatu'), null);
 });
 
+test('whoever has the name but made nothing is passed over for whoever nearly has it and did', async () => {
+  const server = catalogueStandIn({
+    films: [{ title: 'The Harbour Light', year: 1931, known: 20, cast: ['Jon Pellham'] }],
+    // Better known than the actor, and called exactly what was asked for.
+    people: [{ name: 'John Pellham', about: 'English clockmaker', known: 30 }],
+  });
+  const catalogue = clientFor(server);
+  const actor = await catalogue.person('John Pellham');
+  assert.equal(actor.name, 'Jon Pellham');
+  assert.equal(actor.inexact, true);
+  assert.match(actor.id, /^Q\d+$/);
+  // Asked for by his own name, nothing about it is inexact.
+  assert.equal((await catalogue.person('Jon Pellham')).inexact, undefined);
+  // Where nobody of the name or near it made anything, there is nobody.
+  assert.equal(await clientFor(catalogueStandIn({ people: [{ name: 'John Pellham', known: 30 }] })).person('John Pellham'), null);
+
+  // Both words of a name a letter off, which as one text is too far from it to be a misspelling.
+  const twice = await catalogue.person('Jonn Pelham');
+  assert.equal(twice.name, 'Jon Pellham');
+  assert.equal(twice.inexact, true);
+  // But not a different name that happens to be as long.
+  assert.equal(await catalogue.person('Ned Pellham'), null);
+
+  // A namesake who did have a part in something is who is meant, however obscure beside the other.
+  const two = catalogueStandIn({
+    films: [
+      { title: 'A Quiet Reel', year: 1931, known: 2, cast: ['John Pellham'] },
+      { title: 'The Harbour Light', year: 1932, known: 90, cast: ['Jon Pellham'] },
+    ],
+  });
+  const meant = await clientFor(two).person('John Pellham');
+  assert.equal(meant.name, 'John Pellham');
+  assert.equal(meant.inexact, undefined);
+});
+
+test('a film star’s shows are listed, and what two people were both in is found though neither is known for it', async () => {
+  const films = Array.from({ length: 13 }, (unused, i) => ({ title: `Reel ${i + 1}`, year: 1990 + i, known: 60 - i, cast: ['Maud Pellham'] }));
+  const server = catalogueStandIn({
+    films: [...films, { title: 'Her Own Film', year: 2010, known: 1, directors: ['Maud Pellham'], cast: ['Ned Carrow'] }, { title: 'Carrow Alone', year: 2011, known: 70, cast: ['Ned Carrow'] }],
+    shows: [
+      { id: 1, name: 'Low Tide', year: 2012, weight: 20, seasons: { 1: 4 }, cast: ['Maud Pellham', 'Ned Carrow'] },
+      { id: 2, name: 'High Water', year: 2014, weight: 60, seasons: { 1: 6 }, cast: ['Ned Carrow', 'Ines Varley'] },
+    ],
+  });
+  const catalogue = clientFor(server);
+  const maud = await catalogue.person('Maud Pellham');
+  assert.equal(maud.films.length, 10);
+  assert.ok(!maud.films.some((part) => part.title === 'Reel 13'), 'only the best known of thirteen');
+  // Thirteen better-known films do not crowd the one show out.
+  assert.deepEqual(maud.shows, [{ title: 'Low Tide', year: 2012, as: ['actor'] }]);
+
+  const ned = await catalogue.person('Ned Carrow');
+  const ines = await catalogue.person('Ines Varley');
+  // One was in it and the other was too, or directed it.
+  assert.deepEqual(await catalogue.together(maud, ned), [
+    { kind: 'show', title: 'Low Tide', year: 2012 },
+    { kind: 'film', title: 'Her Own Film', year: 2010 },
+  ]);
+  assert.deepEqual(await catalogue.together(ned, maud), await catalogue.together(maud, ned));
+  assert.deepEqual(await catalogue.together(ned, ines), [{ kind: 'show', title: 'High Water', year: 2014 }]);
+  // Nothing in common, the same person twice, and nobody.
+  assert.deepEqual(await catalogue.together(maud, ines), []);
+  assert.deepEqual(await catalogue.together(maud, maud), []);
+  assert.deepEqual(await catalogue.together(maud, null), []);
+});
+
 test('suggestions: in the vein of something, read about most just now, or of a genre', async () => {
   const catalogue = clientFor(world());
   // More of the same kind, best known first, and never the thing itself.

@@ -27,6 +27,9 @@ const MAX_SERIES = 12;
 const MAX_LISTED = 8;
 const MAX_FILMS_OF_PERSON = 10;
 const MAX_SHOWS_OF_PERSON = 5;
+// How many people of a name are looked at for one who has made something, and how much two people may share.
+const MAX_NAMESAKES = 3;
+const MAX_TOGETHER = 8;
 const MAX_FOUND = 10;
 // Of what a search found, how many with the right name are looked at closely.
 const MAX_NAMED = 8;
@@ -158,6 +161,25 @@ function misspelt(wanted, key) {
   if (Math.min(wanted.length, key.length) < 6) return false;
   const allowed = Math.min(3, Math.max(1, Math.floor(Math.max(wanted.length, key.length) / 8)));
   return Math.abs(wanted.length - key.length) <= allowed && lettersApart(wanted, key) <= allowed;
+}
+
+/**
+ * A person's name with its words each a letter or two off: "Jon" for "John", or
+ * both of two words misspelt, which taken as one text is too far off to be
+ * `misspelt`. The words are as many and in the same order.
+ */
+function nearlyNamed(wanted, key) {
+  const want = wanted.split(' ');
+  const have = key.split(' ');
+  if (want.length < 2 || want.length !== have.length) return false;
+  let off = 0;
+  for (const [i, word] of want.entries()) {
+    const longer = Math.max(word.length, have[i].length);
+    const apart = lettersApart(word, have[i]);
+    if (apart > (longer >= 6 ? 2 : longer >= 3 ? 1 : 0)) return false;
+    off += apart;
+  }
+  return off > 0 && off <= 4;
 }
 
 /** The words asked for, in order, inside a slightly longer name: "Jekyll and Hyde" in "Dr Jekyll and Mr Hyde". */
@@ -729,19 +751,25 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     return (focused.length >= most ? focused : all).sort((a, b) => b.known - a.known).map((entry) => entry.line).slice(0, most);
   }
   const KINDS = [KIND_FILTER.film, KIND_FILTER.show].join('|');
+  /** Has this person among its cast, or as its director or creator. */
+  const inAnyPart = (id) => [P.cast, P.director, P.creator].map((property) => `${property}=${id}`).join('|');
 
   /** What someone is known for: their own work first, then the best known. */
   const credits = (id) =>
     remembered(`credits ${id}`, DETAILS_FRESH_MS, async () => {
-      const [acted, directed, created, person] = await Promise.all([
-        searchIds('', [`${P.cast}=${id}`, KINDS], { sort: BEST_KNOWN_FIRST, most: 12 }),
+      // Films and shows are asked for apart: taken together, a film star's dozen best-known parts are all films.
+      const [actedInFilms, actedInShows, directed, created, person] = await Promise.all([
+        searchIds('', [`${P.cast}=${id}`, KIND_FILTER.film], { sort: BEST_KNOWN_FIRST, most: 12 }),
+        searchIds('', [`${P.cast}=${id}`, KIND_FILTER.show], { sort: BEST_KNOWN_FIRST, most: 6 }),
         searchIds('', [`${P.director}=${id}`, KINDS], { sort: BEST_KNOWN_FIRST, most: 8 }),
         searchIds('', [`${P.creator}=${id}`, KINDS], { sort: BEST_KNOWN_FIRST, most: 4 }),
         entities([id], FULL),
       ]);
+      const acted = [...actedInFilms, ...actedInShows];
       const roles = new Map();
       const note = (ids, as) => ids.forEach((part, rank) => roles.set(part, { rank: Math.min(rank, roles.get(part)?.rank ?? rank), as: [...(roles.get(part)?.as ?? []), as] }));
-      note(acted, 'actor');
+      note(actedInFilms, 'actor');
+      note(actedInShows, 'actor');
       note(directed, 'director');
       note(created, 'creator');
       const directs = idsOf(person.get(id), P.occupation).some((occupation) => DIRECTORS.has(occupation)) && directed.length >= acted.length;
@@ -821,8 +849,10 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     },
 
     /**
-     * A person by name and what they are known for: `{ name, knownFor, films, shows }`,
-     * each part as `{ title, year, as: ['actor'] }`. Null when no one is called that.
+     * A person by name and what they are known for: `{ id, name, knownFor, films, shows }`,
+     * each part as `{ title, year, as: ['actor'] }`, with `inexact` when the name is a
+     * letter or two off the one asked for. Null when no one who has had a part in a
+     * film or a show is called that.
      */
     async person(name) {
       const words = searchWords(cleanName(name));
@@ -830,12 +860,35 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
       if (!wanted || !words.length) return null;
       const called = async (text) =>
         [...(await entities(await searchIds(text, [`${P.kind}=${HUMAN}`]), LIGHT)).values()]
-          .map((entity) => ({ id: entity.id, known: Object.keys(entity.sitelinks ?? {}).length, like: likeness(wanted, keysOf([labelOf(entity), ...(entity.aliases?.en ?? []).map((alias) => cleanName(alias.value))])) }))
+          .map((entity) => ({ id: entity.id, known: Object.keys(entity.sitelinks ?? {}).length, keys: keysOf([labelOf(entity), ...(entity.aliases?.en ?? []).map((alias) => cleanName(alias.value))]) }))
+          .map(({ keys, ...entry }) => ({ ...entry, like: likeness(wanted, keys) || Number(keys.some((key) => nearlyNamed(wanted, key))) }))
           .filter((entry) => entry.like > 0)
-          // The best known of those with the name; failing that, of those nearly called it.
-          .sort((a, b) => b.like - a.like || b.known - a.known)[0];
-      const best = (await called(words.join(' '))) ?? (await called(words.map((word) => (word.length >= 4 ? `${word}~` : word)).join(' ')));
-      return best ? credits(best.id) : null;
+          // The best known of those with the name, then of those nearly called it.
+          .sort((a, b) => b.like - a.like || b.known - a.known);
+      // Whoever has the name but no part in any film or show is not who is meant: a politician, say, whose
+      // name is one letter from an actor's. The next of the name is tried, and then those nearly called it.
+      const tried = new Set();
+      for (const text of [words.join(' '), words.map((word) => (word.length >= 4 ? `${word}~` : word)).join(' ')]) {
+        for (const entry of (await called(text)).filter((other) => !tried.has(other.id)).slice(0, MAX_NAMESAKES)) {
+          tried.add(entry.id);
+          if (!(await searchIds('', [inAnyPart(entry.id), KINDS], { most: 1 })).length) continue;
+          const found = await credits(entry.id);
+          if (found.films.length || found.shows.length) return { ...found, id: entry.id, ...(entry.like === 1 && { inexact: true }) };
+        }
+      }
+      return null;
+    },
+
+    /**
+     * The films and shows two people both had a part in, as actor, director or
+     * creator, best known first: `{ kind, title, year }` each. The two are people
+     * as `person` gives them.
+     */
+    async together(one, other) {
+      if (!one?.id || !other?.id || one.id === other.id) return [];
+      const ids = await searchIds('', [inAnyPart(one.id), inAnyPart(other.id), KINDS], { sort: BEST_KNOWN_FIRST, most: MAX_TOGETHER });
+      const full = await entities(ids, 'labels|descriptions|claims');
+      return ids.map((id) => listed(full.get(id))).filter(Boolean).map(({ kind, title, year }) => ({ kind, title, year }));
     },
 
     /**

@@ -13,8 +13,10 @@
 // TVmaze's measure out of 100. `otherNames` are a film's names in other
 // languages. `seasons` maps a season number to how many episodes it has; `last`
 // is `{ season, episode }`, the latest to have aired, and everything listed
-// has aired when it is left out. `mostRead` lists titles in the order
-// Wikipedia's readers looked them up.
+// has aired when it is left out. `people` are `{ name, about, known }`: people who
+// have had no part in any film or show, whose names an actor's may be taken for.
+// Whoever is named in a cast or as a director needs no entry. `mostRead` lists
+// titles in the order Wikipedia's readers looked them up.
 //
 // Searching is no more forgiving than the real thing. Wikidata wants every
 // word to be a word of a name or of the description, and forgives a letter or
@@ -65,8 +67,13 @@ function lettersApart(a, b) {
 }
 /** Two words that differ by a letter, or by two when they are long. */
 const nearly = (a, b) => a === b || (Math.min(a.length, b.length) >= 4 && lettersApart(a, b) <= (Math.min(a.length, b.length) >= 6 ? 2 : 1));
+/**
+ * What Wikidata's search takes a word followed by "~" to match: the word itself, or one a
+ * letter off when the word has three to five letters, or two letters off when it has more.
+ */
+const roughlyIs = (asked, other) => asked === other || (asked.length >= 3 && lettersApart(asked, other) <= (asked.length > 5 ? 2 : 1));
 
-export function catalogueStandIn({ films = [], shows = [], mostRead = [] } = {}, { now = Date.now } = {}) {
+export function catalogueStandIn({ films = [], shows = [], people = [], mostRead = [] } = {}, { now = Date.now } = {}) {
   const state = { requests: [], down: new Set() };
   const today = () => new Date(now()).toISOString().slice(0, 10);
   const dayFrom = (offset) => new Date(now() + offset * DAY_MS).toISOString().slice(0, 10);
@@ -149,6 +156,7 @@ export function catalogueStandIn({ films = [], shows = [], mostRead = [] } = {},
       claims: claims({ P31: [pointTo(HUMAN)], P106: [...(acted ? [pointTo(ACTOR)] : []), ...(directed ? [pointTo(DIRECTOR)] : [])] }),
     });
   }
+  people.forEach((person, i) => put(`Q${5000 + i}`, { labels: label(person.name), aliases: {}, descriptions: label(person.about ?? ''), otherNames: [], sitelinks: links(person.known ?? 1, null), claims: claims({ P31: [pointTo(HUMAN)] }) }));
   for (const name of seriesNames) put(seriesId(name), { labels: label(name), aliases: {}, descriptions: label('film series'), otherNames: [], sitelinks: {}, claims: claims({ P31: [pointTo('Q24856')] }) });
   // What a film's facts point to has a name too.
   for (const [name, id] of [...Object.entries(COUNTRIES), ...Object.entries(LANGUAGES)]) put(id, { labels: label(name), aliases: {}, descriptions: label(''), otherNames: [], sitelinks: {}, claims: {} });
@@ -172,7 +180,7 @@ export function catalogueStandIn({ films = [], shows = [], mostRead = [] } = {},
     const found = [...entities.values()].filter((entity) => {
       if (!having.every((either) => either.some((statement) => has(entity, statement)))) return false;
       const text = [entity.labels.en.value, ...(entity.aliases.en ?? []).map((alias) => alias.value), ...entity.otherNames, entity.descriptions.en.value].flatMap(words).map(stem);
-      return wanted.every(({ word, roughly }) => text.some((other) => (roughly ? nearly(word, other) : word === other)));
+      return wanted.every(({ word, roughly }) => text.some((other) => (roughly ? roughlyIs(word, other) : word === other)));
     });
     // With no words there is nothing to be relevant to, and an empty search with no statement finds nothing.
     if (!wanted.length && !having.length) return json({ query: { searchinfo: { totalhits: 0 }, search: [] } });

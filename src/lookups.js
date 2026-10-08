@@ -110,6 +110,12 @@ export function heldAgainst(held, guide) {
 
 const MAX_SEASONS_LISTED = 12;
 const MAX_PLEX_MARKS = 15;
+// A second person looked up within this long of a first is taken to belong to the same question,
+// and is compared with the last few.
+const PEOPLE_REMEMBERED_MS = 30 * 60 * 1000;
+const MAX_PEOPLE_REMEMBERED = 4;
+const MAX_COMPARED = 2;
+const MAX_NAMED_IN_STATUS = 3;
 
 const LOOK_UP_DEFINITION = {
   type: 'function',
@@ -171,9 +177,19 @@ const listLine = (entry, held) => `${titled(entry)}${entry.about && !SAYS_NOTHIN
  * and give undefined when they cannot be asked; `tell(user, turn, key)` notes
  * that the person has been told Plex has something.
  */
-export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, genres }) {
+export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, genres, now = Date.now }) {
   const UNREACHABLE = { error: 'The catalogue cannot be reached right now. Tell the user you cannot look that up at the moment.' };
   const ONLY_LOOKED = 'This only looked it up: nothing was searched for and nothing is downloading.';
+
+  // The people each user looked up a little while ago, latest first.
+  const lookedUp = new Map();
+  /** Whom this user looked up lately, other than `person`, who is remembered for the next time. */
+  function recentlyLookedUp(user, person) {
+    const at = now();
+    const others = (lookedUp.get(user.id) ?? []).filter((entry) => at - entry.at < PEOPLE_REMEMBERED_MS && entry.id !== person.id);
+    lookedUp.set(user.id, [{ id: person.id, name: person.name, at }, ...others].slice(0, MAX_PEOPLE_REMEMBERED));
+    return others;
+  }
 
   /** Which of some films and shows Plex has, as a set of their places in the list. Empty when Plex cannot say. */
   async function inPlex(entries) {
@@ -311,16 +327,33 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
         turn.status(`Looked up ${name}: the catalogue knows no film-maker of that name`, 'search');
         return { found: false, catalogue: `The catalogue knows no actor or film-maker called “${name}”.`, note: 'Tell the user that, and ask them to check the name.' };
       }
-      turn.status(`Looked up ${person.name}`, 'search');
+      turn.status(person.inexact ? `Looked up ${name}: taken to be ${person.name}` : `Looked up ${person.name}`, 'search');
       const parts = [...person.films.map((part) => ({ ...part, kind: 'film' })), ...person.shows.map((part) => ({ ...part, kind: 'show' }))];
       const held = await inPlex(parts);
       const line = (part) => `${titled(part)}, as ${listOf(part.as)}${held.has(parts.indexOf(part)) ? ' (already in Plex)' : ''}`;
+
+      // Asked about two people, a model looks each of them up. What they were both in is seldom among the
+      // best known of either, so PiRick asks the catalogue for that itself.
+      const inCommon = [];
+      for (const other of recentlyLookedUp(user, person).slice(0, MAX_COMPARED)) {
+        const both = await askCatalogue(() => catalogue.together(person, other));
+        if (!both) continue;
+        const theirs = await inPlex(both);
+        const named = both.map((part, i) => `the ${part.kind} ${titled(part)}${theirs.has(i) ? ' (already in Plex)' : ''}`);
+        // The chat line names a few; the model is given them all.
+        const few = both.slice(0, MAX_NAMED_IN_STATUS).map(titled);
+        turn.status(`Compared with ${other.name}: ${both.length ? `both in ${listOf(both.length > few.length ? [...few, `${both.length - few.length} more`] : few)}` : 'nothing listed with both'}`, 'search');
+        inCommon.push(`With ${other.name}, looked up earlier: ${both.length ? listOf(named) : 'nothing the catalogue lists'}.`);
+      }
+      const together = inCommon.length ? ' What this person and one looked up earlier were both in is under in_common, and is all the catalogue lists: go by that, not by comparing the two lists.' : '';
       return said({
         person: person.name,
+        ...(person.inexact && { catalogue: `No actor or film-maker is called “${name}”. The nearest is ${person.name}, and that is who was looked up.` }),
         known_as: person.knownFor,
+        in_common: inCommon,
         films: parts.filter((part) => part.kind === 'film').map(line),
         shows: parts.filter((part) => part.kind === 'show').map(line),
-        note: `These are the best known of their work, not all of it. ${ONLY_LOOKED} If the user wants one fetched, call search_media for a film or find_show for a show, with its title and year.`,
+        note: `These are the best known of their work, not all of it.${together} ${ONLY_LOOKED} If the user wants one fetched, call search_media for a film or find_show for a show, with its title and year.`,
       });
     },
 

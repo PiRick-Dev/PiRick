@@ -7,6 +7,7 @@ import { test } from 'node:test';
 process.env.LOG_LEVEL = 'error';
 
 const { sayDate } = await import('../src/catalogue.js');
+const { createLookups } = await import('../src/lookups.js');
 const { talkTo } = await import('../bench/world.js');
 
 const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
@@ -137,12 +138,18 @@ test('a person is looked up with what they are known for', async () => {
     const { outputs, record } = await chat.say('What has Buster Keaton been in?', [call('look_up_person', { name: 'buster keeton' })], 'The General, Sherlock Jr. and Seven Chances, among others.');
     assert.deepEqual(outputs[0], {
       person: 'Buster Keaton',
+      // The name was a letter off, which is said, so that the model does not repeat the misspelling as his name.
+      catalogue: 'No actor or film-maker is called “buster keeton”. The nearest is Buster Keaton, and that is who was looked up.',
       known_as: 'director',
       films: ['The General (1926), as actor and director', 'Sherlock Jr. (1924), as actor and director', 'Seven Chances (1925), as actor and director (already in Plex)'],
       note: `These are the best known of their work, not all of it. ${ONLY_LOOKED} If the user wants one fetched, call search_media for a film or find_show for a show, with its title and year.`,
     });
-    assert.deepEqual(record.statuses, ['Looked up Buster Keaton']);
+    assert.deepEqual(record.statuses, ['Looked up buster keeton: taken to be Buster Keaton']);
     assert.equal(record.nudges, 0);
+    // Spelt right, nothing is said about the name.
+    const right = await chat.say('Keaton again?', [call('look_up_person', { name: 'Buster Keaton' })], 'The same.');
+    assert.equal(right.outputs[0].catalogue, undefined);
+    assert.deepEqual(right.record.statuses, ['Looked up Buster Keaton']);
 
     const maker = await chat.say('What did Ada Fenwick make?', [call('look_up_person', { name: 'Ada Fenwick' })], 'Brindlemoor.');
     assert.deepEqual(maker.outputs[0].shows, ['Brindlemoor (2015), as actor and creator']);
@@ -154,6 +161,71 @@ test('a person is looked up with what they are known for', async () => {
   } finally {
     chat.close();
   }
+});
+
+test('two people looked up one after the other are told what they were both in', async () => {
+  const chat = pirick({ plex: { shows: [{ title: 'Brindlemoor', year: 2015, seasons: { 1: 10 } }] } });
+  try {
+    // The second name is a letter off, and belongs as it stands to someone who never had a part in anything.
+    const steps = [call('look_up_person', { name: 'Ada Fenwick' }), call('look_up_person', { name: 'Tobias Wrenn' })];
+    const { outputs, record } = await chat.say('What was that show with Ada Fenwick and Tobias Wrenn in it?', steps, 'That was Brindlemoor (2015).');
+    assert.equal(outputs[0].person, 'Ada Fenwick');
+    assert.equal(outputs[0].in_common, undefined);
+    assert.doesNotMatch(outputs[0].note, /in_common/);
+    assert.equal(outputs[1].person, 'Tobias Wren');
+    assert.equal(outputs[1].catalogue, 'No actor or film-maker is called “Tobias Wrenn”. The nearest is Tobias Wren, and that is who was looked up.');
+    assert.deepEqual(outputs[1].in_common, ['With Ada Fenwick, looked up earlier: the show Brindlemoor (2015) (already in Plex).']);
+    assert.match(outputs[1].note, /^These are the best known of their work, not all of it\. What this person and one looked up earlier were both in is under in_common, and is all the catalogue lists: go by that, not by comparing the two lists\. This only looked it up/);
+    assert.deepEqual(record.statuses, ['Looked up Ada Fenwick', 'Looked up Tobias Wrenn: taken to be Tobias Wren', 'Compared with Ada Fenwick: both in Brindlemoor (2015)']);
+    assert.deepEqual(chat.world.trace().searches, [], 'nothing is searched for');
+    assert.equal(record.nudges, 0);
+
+    // A message later, someone who shares nothing with either: that is said too, of the last two.
+    const later = await chat.say('And Buster Keaton?', [call('look_up_person', { name: 'Buster Keaton' })], 'Nothing with them.');
+    assert.deepEqual(later.outputs[0].in_common, ['With Tobias Wren, looked up earlier: nothing the catalogue lists.', 'With Ada Fenwick, looked up earlier: nothing the catalogue lists.']);
+    assert.deepEqual(later.record.statuses, ['Looked up Buster Keaton', 'Compared with Tobias Wren: nothing listed with both', 'Compared with Ada Fenwick: nothing listed with both']);
+    // Nobody is compared with themselves.
+    const again = await chat.say('Keaton again?', [call('look_up_person', { name: 'Buster Keaton' })], 'The same.');
+    assert.equal(again.outputs[0].in_common.length, 2);
+    assert.ok(again.outputs[0].in_common.every((line) => !line.includes('Buster Keaton')));
+  } finally {
+    chat.close();
+  }
+});
+
+test('people are remembered for half an hour, each user’s apart from the rest', async () => {
+  let clock = 0;
+  const people = Object.fromEntries(['Ada Fenwick', 'Tobias Wren'].map((name, i) => [name, { id: `Q${i + 1}`, name, knownFor: 'actor', films: [], shows: [{ title: 'Brindlemoor', year: 2015, as: ['actor'] }] }]));
+  const compared = [];
+  let shared = [{ kind: 'show', title: 'Brindlemoor', year: 2015 }];
+  const catalogue = {
+    person: async (name) => people[name] ?? null,
+    together: async (one, other) => {
+      compared.push(`${one.name} and ${other.name}`);
+      return shared;
+    },
+  };
+  const { handlers } = createLookups({ catalogue, plex: null, askCatalogue: (ask) => ask(), askPlex: async () => undefined, tell: () => {}, genres: [], now: () => clock });
+  const statuses = [];
+  const turn = { status: (line) => statuses.push(line), emit() {} };
+  const ask = (user, name) => handlers.look_up_person({ id: user }, { name }, turn);
+
+  await ask(1, 'Ada Fenwick');
+  // Someone else asking about the other of the two is asking their own question.
+  assert.equal((await ask(2, 'Tobias Wren')).in_common, undefined);
+  clock += 29 * 60 * 1000;
+  assert.deepEqual((await ask(1, 'Tobias Wren')).in_common, ['With Ada Fenwick, looked up earlier: the show Brindlemoor (2015).']);
+  assert.deepEqual(compared, ['Tobias Wren and Ada Fenwick']);
+  // Half an hour on, it is another conversation.
+  clock += 31 * 60 * 1000;
+  assert.equal((await ask(1, 'Ada Fenwick')).in_common, undefined);
+  assert.equal(compared.length, 1);
+
+  // Where two people share a great deal, the model is given all of it and the chat line names a few.
+  shared = [1, 2, 3, 4, 5].map((number) => ({ kind: 'film', title: `Reel ${number}`, year: 1930 + number }));
+  const many = await ask(1, 'Tobias Wren');
+  assert.equal(many.in_common[0], 'With Ada Fenwick, looked up earlier: the film Reel 1 (1931), the film Reel 2 (1932), the film Reel 3 (1933), the film Reel 4 (1934) and the film Reel 5 (1935).');
+  assert.equal(statuses.at(-1), 'Compared with Ada Fenwick: both in Reel 1 (1931), Reel 2 (1932), Reel 3 (1933) and 2 more');
 });
 
 test('suggestions come from the catalogue: like something, of a genre, or what is read about most', async () => {
