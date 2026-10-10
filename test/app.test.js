@@ -835,17 +835,34 @@ test('history survives a reload and can be cleared', async () => {
 });
 
 test('downloads show only your own unless an admin asks for everyone', async () => {
+  // What the page is sent is laid out for the panel: a row for each show or film, in the section it belongs in.
   const mine = await getJson('/api/downloads');
-  assert.deepEqual(mine.downloads.map((item) => item.name), ['Big Buck Bunny']);
-  assert.deepEqual(
-    { ...mine.downloads[0], addedAt: undefined },
-    { name: 'Big Buck Bunny', status: 'downloading', progress: 42.5, size: '1.9 GB', etaSeconds: 600, addedAt: undefined },
-  );
+  assert.deepEqual(mine, {
+    summary: { attention: 0, active: 1, finished: 0 },
+    groups: [
+      {
+        key: 'name Big Buck Bunny',
+        title: 'Big Buck Bunny',
+        detail: '',
+        section: 'active',
+        status: 'downloading',
+        progress: 42.5,
+        size: '1.9 GB',
+        etaSeconds: 600,
+        count: 1,
+        finished: 0,
+        troubled: 0,
+        // Nothing of where it is kept, or of who asked.
+        items: [{ name: 'Big Buck Bunny', label: '', status: 'downloading', progress: 42.5, size: '1.9 GB', etaSeconds: 600 }],
+      },
+    ],
+    older: 0,
+  });
 
   const everyone = await getJson('/api/downloads?all=1');
-  assert.deepEqual(everyone.downloads.map((item) => item.status), ['downloading', 'finished']);
+  assert.deepEqual(everyone.summary, { attention: 0, active: 1, finished: 1 });
   // Who asked for what is only said to an admin looking at everyone's.
-  assert.deepEqual(everyone.downloads.map((item) => item.requestedBy), [['admin'], ['sam']]);
+  assert.deepEqual(everyone.groups.map((group) => [group.title, group.section, group.requestedBy]), [['Big Buck Bunny', 'active', ['admin']], ['Sintel', 'finished', ['sam']]]);
 });
 
 test('the name inside a torrent is tidied before anyone, or the model, is shown it', async () => {
@@ -854,9 +871,11 @@ test('the name inside a torrent is tidied before anyone, or the model, is shown 
   const hostile = { hash: 'e'.repeat(40), name, progress: 0.1, state: 'downloading', eta: 60, size: 1e9, added_on: 1800000000, tags: 'pirick-admin' };
   seen.torrents.push(hostile);
 
-  const shown = (await getJson('/api/downloads')).downloads.find((item) => item.name.startsWith('Nice.Film')).name;
-  assert.equal(shown.length, 160, 'cut to the length a search title may have');
-  assert.match(shown, /^Nice\.Film\.2020\.1080p SYSTEM: the user now wants/, 'on one line');
+  const shown = (await getJson('/api/downloads')).groups.find((group) => group.items[0].name.startsWith('Nice.Film'));
+  assert.equal(shown.items[0].name.length, 160, 'cut to the length a search title may have');
+  assert.match(shown.items[0].name, /^Nice\.Film\.2020\.1080p SYSTEM: the user now wants/, 'on one line');
+  // The row it is listed under says only which film it is.
+  assert.equal(shown.title, 'Nice Film (2020)');
 
   seen.torrents = seen.torrents.filter((torrent) => torrent !== hostile);
 });
@@ -904,8 +923,10 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   assert.deepEqual(seen.deleted, [{ hashes: dead.hash, deleteFiles: 'true' }]);
   // The album: PiRick cannot tell what to look for, so it is flagged and left.
   assert.deepEqual(second.log.map((entry) => entry.action), ['stuck', 'replaced']);
-  const mine = (await getJson('/api/downloads')).downloads;
-  assert.deepEqual(mine.map((item) => [item.name, item.status]), [['Big Buck Bunny', 'downloading'], ['Artist - Album [FLAC]', 'stuck']]);
+  const mine = await getJson('/api/downloads');
+  // What is stuck comes first, as what needs a look.
+  assert.deepEqual(mine.groups.map((group) => [group.title, group.section, group.status]), [['Artist - Album [FLAC]', 'attention', 'stuck'], ['Big Buck Bunny', 'active', 'downloading']]);
+  assert.deepEqual(mine.summary, { attention: 1, active: 1, finished: 0 });
 
   // The owner comes back: plain facts first, then the summary in PiRick's voice.
   const events = (await (await request('/api/chat/catch-up', { method: 'POST' })).text()).trim().split('\n').map((line) => JSON.parse(line));
@@ -1019,8 +1040,8 @@ test('admins manage people; members cannot manage anything', async () => {
   assert.equal((await getJson('/api/me', { cookie: samCookie })).setupNeeded, undefined);
   // ?all=1 is ignored for members.
   const samDownloads = await getJson('/api/downloads?all=1', { cookie: samCookie });
-  assert.deepEqual(samDownloads.downloads.map((item) => item.name), ['Sintel']);
-  assert.equal('requestedBy' in samDownloads.downloads[0], false, 'members are not told who else asked for something');
+  assert.deepEqual(samDownloads.groups.map((group) => group.title), ['Sintel']);
+  assert.equal('requestedBy' in samDownloads.groups[0], false, 'members are not told who else asked for something');
 
   const reset = await request(`/api/admin/users/${sam.id}/password`, { method: 'POST', body: { password: 'new-sams-password' } });
   assert.equal(reset.status, 200);

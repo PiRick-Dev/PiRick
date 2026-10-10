@@ -272,36 +272,129 @@ function timeLeft(seconds) {
   return `about ${Math.round(hours / 24)} days left`;
 }
 
-function downloadRow(item, everyone) {
-  const status = item.status in STATUS_LABELS ? item.status : 'unknown';
+// The server gathers downloads by show or film and says which section each row
+// belongs in (see downloads.js there). What is left to do here is to draw them.
+const DOWNLOAD_SECTIONS = { attention: $('#dl-attention'), active: $('#dl-active'), finished: $('#dl-finished') };
+// Finished downloads are folded away once there are more than this many and something else is going on.
+const FINISHED_SHOWN = 3;
+// The list is drawn again every few seconds. These keep it as the person left it:
+// which rows they opened, and whether they chose to see the finished ones.
+const openRows = new Set();
+let finishedOpen = null;
+let drawn = '';
+
+const statusOf = (entry) => (entry.status in STATUS_LABELS ? entry.status : 'unknown');
+
+/** What is said under one download: how it is doing, how far along, how big, how long. */
+function downloadMeta(item) {
+  const status = statusOf(item);
   // "Ready in Plex" is only said once Plex has been asked to pick the download up.
   const details = [item.inPlex ? 'Finished, ready in Plex' : STATUS_LABELS[status]];
   if (status !== 'finished') details.push(`${item.progress}%`);
   details.push(item.size);
   if (item.etaSeconds != null) details.push(timeLeft(item.etaSeconds));
-  if (everyone && item.requestedBy?.length) details.push(`for ${item.requestedBy.join(', ')}`);
-  return h(
-    'li',
-    { class: `download ${status}` },
-    h('div', { class: 'dl-name' }, item.name),
-    h('progress', { max: 100, value: item.progress }),
-    h('div', { class: 'dl-meta' }, details.join(' · ')),
+  return details.join(' · ');
+}
+
+/** The same for a row that stands for several downloads of one show. */
+function rowMeta(group) {
+  if (group.count === 1) return downloadMeta(group.items[0]);
+  let state = group.inPlex ? 'Finished, ready in Plex' : STATUS_LABELS[statusOf(group)];
+  // Trouble with one episode is not trouble with them all.
+  if (group.troubled && group.troubled < group.count) state += ` (${group.troubled} of ${group.count})`;
+  const details = [state];
+  if (group.finished < group.count) details.push(`${group.progress}%`, `${group.finished} of ${group.count} finished`);
+  details.push(group.size);
+  if (group.etaSeconds != null) details.push(timeLeft(group.etaSeconds));
+  return details.join(' · ');
+}
+
+/** One row: a show or film under its own name, which opens to the downloads it is made up of. */
+function downloadRow(group, everyone) {
+  const single = group.count === 1;
+  const row = h(
+    'details',
+    {
+      class: 'dl-row',
+      open: openRows.has(group.key),
+      ontoggle: (event) => openRows[event.currentTarget.open ? 'add' : 'delete'](group.key),
+    },
+    h(
+      'summary',
+      {},
+      h(
+        'div',
+        { class: 'dl-name' },
+        h('span', { class: 'dl-title' }, group.title),
+        group.detail && h('span', { class: 'dl-detail' }, group.detail),
+        everyone && group.requestedBy?.length > 0 && h('span', { class: 'dl-for' }, `for ${group.requestedBy.join(', ')}`),
+      ),
+      // A bar that is full says nothing the words below it do not.
+      group.finished < group.count && h('progress', { max: 100, value: group.progress }),
+      h('div', { class: `dl-meta ${statusOf(group)}` }, rowMeta(group)),
+    ),
+    h(
+      'ul',
+      { class: 'dl-parts' },
+      ...group.items.map((item) =>
+        h(
+          'li',
+          {},
+          !single && h('div', { class: 'dl-part' }, item.label && h('span', { class: 'dl-part-name' }, item.label), h('span', { class: `dl-meta ${statusOf(item)}` }, downloadMeta(item))),
+          // The name its maker gave it, which is what qBittorrent lists it under.
+          h('div', { class: 'dl-release' }, item.name),
+        ),
+      ),
+    ),
   );
+  row.dataset.key = group.key;
+  return h('li', { class: 'download' }, row);
+}
+
+function drawDownloads({ summary, groups, older }, everyone) {
+  const focused = document.activeElement?.closest?.('.dl-row')?.dataset.key;
+  const said = [
+    summary.attention && `${summary.attention} ${summary.attention === 1 ? 'needs' : 'need'} a look`,
+    summary.active && `${summary.active} on the way`,
+    summary.finished && `${summary.finished} finished`,
+  ].filter(Boolean);
+  $('#dl-summary').textContent = said.join(' · ');
+  $('#dl-summary').hidden = groups.length === 0;
+  $('#dl-empty').hidden = groups.length > 0;
+  for (const [name, section] of Object.entries(DOWNLOAD_SECTIONS)) {
+    const rows = groups.filter((group) => group.section === name);
+    section.hidden = rows.length === 0;
+    section.querySelector('ul').replaceChildren(...rows.map((group) => downloadRow(group, everyone)));
+  }
+  $('#dl-finished-count').textContent = `(${summary.finished})`;
+  DOWNLOAD_SECTIONS.finished.open = finishedOpen ?? (summary.attention + summary.active === 0 || summary.finished <= FINISHED_SHOWN);
+  $('#dl-older').textContent = older === 1 ? '1 older download is not shown.' : `${older} older downloads are not shown.`;
+  $('#dl-older').hidden = !older;
+  // Whoever is going through the rows with the keyboard stays on the row they were on.
+  if (focused) [...downloadsDialog.querySelectorAll('.dl-row')].find((row) => row.dataset.key === focused)?.querySelector('summary').focus();
 }
 
 async function loadDownloads() {
   const everyone = $('#dl-all').checked;
   const error = $('#dl-error');
   try {
-    const { downloads } = await api(`/api/downloads${everyone ? '?all=1' : ''}`);
+    const layout = await api(`/api/downloads${everyone ? '?all=1' : ''}`);
     error.hidden = true;
-    $('#dl-empty').hidden = downloads.length > 0;
-    $('#dl-list').replaceChildren(...downloads.map((item) => downloadRow(item, everyone)));
+    // Drawn again only when something has changed, so that nothing shifts under a finger for no reason.
+    const now = JSON.stringify([everyone, layout]);
+    if (now === drawn) return;
+    drawn = now;
+    drawDownloads(layout, everyone);
   } catch (err) {
     $('#dl-empty').hidden = true;
     showNote(error, err.message, true);
   }
 }
+
+// Opening or folding the finished ones is a choice that outlasts the next redraw.
+DOWNLOAD_SECTIONS.finished.querySelector('summary').addEventListener('click', () => {
+  finishedOpen = !DOWNLOAD_SECTIONS.finished.open;
+});
 
 $('#btn-downloads').addEventListener('click', () => {
   downloadsDialog.showModal();

@@ -103,21 +103,33 @@ test('PiRick’s own list is numbered in order and says only what this PiRick ha
     const alice = person(db, 'alice');
     return texts(createNews({ db, has: () => has }), alice);
   };
+  const toldNext = (has) => {
+    const db = openDb(':memory:');
+    const alice = person(db, 'alice');
+    const news = createNews({ db, has: () => has });
+    news.heard(alice, ids(news, alice));
+    return texts(news, alice);
+  };
   assert.deepEqual(told(EVERYTHING), [
     'PiRick has themes and personalities to choose from. Open Account to pick a theme, light or dark, and a personality.',
     'PiRick can answer questions about films, shows and the people in them. Ask what something is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.',
     'PiRick now sees that Plex takes what it fetches for the right film or show. When Plex takes something for another of the same name, or does not recognise it, PiRick tells Plex which it is and leaves you a note.',
   ]);
+  // Three are told at a time. The rest come with the next message.
+  assert.deepEqual(toldNext(EVERYTHING), ['PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.']);
   // How to switch that off is for whoever can.
   const db = openDb(':memory:');
   const root = person(db, 'root', 'admin');
   const forAdmin = createNews({ db, has: () => EVERYTHING });
-  forAdmin.heard(root, [1, 2, 3]);
+  forAdmin.heard(root, [1, 2, 3, 5]);
   assert.deepEqual(texts(forAdmin, root), ['PiRick now corrects a wrong match in Plex by itself, for films and shows it has just added and for nothing that was in Plex before. To switch that off, open Admin, then Upkeep.']);
   // Without Plex, or with the correcting switched off, there is nothing to tell of it.
-  assert.equal(told({ catalogue: true, personalities: true, matches: false }).length, 2);
+  assert.equal(told({ catalogue: true, personalities: true, matches: false }).length, 3);
   // No catalogue, and an admin who has removed every personality: neither is offered.
-  assert.deepEqual(told({ catalogue: false, personalities: false }), ['PiRick has themes to choose from. Open Account to pick a theme, and light or dark.']);
+  assert.deepEqual(told({ catalogue: false, personalities: false }), [
+    'PiRick has themes to choose from. Open Account to pick a theme, and light or dark.',
+    'PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.',
+  ]);
 
   // Each is one plain line that can stand alone in the chat.
   for (const has of [EVERYTHING, { catalogue: true, personalities: false }]) {

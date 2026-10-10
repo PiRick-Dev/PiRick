@@ -44,6 +44,10 @@ export const NEWS = [
     admin: true,
     text: 'PiRick now corrects a wrong match in Plex by itself, for films and shows it has just added and for nothing that was in Plex before. To switch that off, open Admin, then Upkeep.',
   },
+  {
+    id: 5,
+    text: 'PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.',
+  },
 ];
 
 /**

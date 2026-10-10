@@ -61,6 +61,10 @@ export function toDownload(torrent) {
     size: formatBytes(torrent.size),
     etaSeconds: active ? torrent.eta : null,
     addedAt: (torrent.added_on ?? 0) * 1000,
+    // Zero until it has finished. qBittorrent says -1 for "not yet".
+    finishedAt: Math.max(0, torrent.completion_on ?? 0) * 1000,
+    bytes: torrent.size ?? 0,
+    savePath: torrent.save_path ?? '',
     requestedBy: String(torrent.tags ?? '')
       .split(',')
       .map((tag) => tag.trim())

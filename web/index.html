@@ -383,9 +383,22 @@
         <button type="button" class="close" data-close aria-label="Close">&times;</button>
       </header>
       <label id="dl-all-wrap" class="check" hidden><input type="checkbox" id="dl-all"> Show everyone's</label>
+      <p id="dl-summary" class="muted small" hidden></p>
       <p id="dl-empty" class="muted" hidden>Nothing here yet. Ask PiRick for something!</p>
       <p id="dl-error" class="form-note bad" role="alert" hidden></p>
-      <ul id="dl-list" class="downloads"></ul>
+      <section id="dl-attention" aria-labelledby="dl-attention-title" hidden>
+        <h3 id="dl-attention-title" class="dl-heading">Needs a look</h3>
+        <ul class="downloads"></ul>
+      </section>
+      <section id="dl-active" aria-labelledby="dl-active-title" hidden>
+        <h3 id="dl-active-title" class="dl-heading">On the way</h3>
+        <ul class="downloads"></ul>
+      </section>
+      <details id="dl-finished" class="dl-fold" hidden>
+        <summary><h3 class="dl-heading">Finished <span id="dl-finished-count"></span></h3></summary>
+        <ul class="downloads"></ul>
+      </details>
+      <p id="dl-older" class="muted small" hidden></p>
     </div>
   </dialog>
 
