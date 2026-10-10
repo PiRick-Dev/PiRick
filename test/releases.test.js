@@ -19,8 +19,17 @@ test('release names are read for what they contain', () => {
     ['Pioneer.One.S01.S02.S03.720p', 'seasons 1-3', 'Pioneer One'],
     ['Pioneer.One.1x05.HDTV', 'S01E05', 'Pioneer One'],
     ['Pioneer.One.S01E01-E07.720p', 'season 1', 'Pioneer One'],
-    ['Pioneer.One.S01E01-E02.720p', 'S01E01', 'Pioneer One'],
-    ['Pioneer.One.S05E15E16.1080p', 'S05E15', 'Pioneer One'],
+    ['Pioneer.One.S01E01-E02.720p', 'S01E01-E02', 'Pioneer One'],
+    ['Pioneer.One.S05E15E16.1080p', 'S05E15-E16', 'Pioneer One'],
+    // A piece of a season is not the season.
+    ['Pioneer.One.S02E05-E09.720p', 'part of season 2', 'Pioneer One'],
+    ['Pioneer.One.S04.Vol.1.1080p.WEB-DL', 'part of season 4', 'Pioneer One'],
+    ['Pioneer One Season 3 Part 2 720p', 'part of season 3', 'Pioneer One'],
+    ['Second.Chances.S01E07.Part.7.HDTV.x264', 'S01E07', 'Second Chances'],
+    // A country in brackets is part of the name, as it is without them.
+    ['Kestrelmere (US) (2005) Season 3 S03 (1080p BluRay x265)', 'season 3', 'Kestrelmere US'],
+    ['[Grp] Kestrelmere [UK] - 05 [720p]', 'episode 5', 'Kestrelmere UK'],
+    ['Brindlemoor.1980.Miniseries.1080p.BluRay.x264-GRP', 'miniseries', 'Brindlemoor'],
     ['Pioneer.One.COMPLETE.720p.WEB', 'complete series', 'Pioneer One'],
     ['Show.S01.COMPLETE.1080p', 'season 1', 'Show'],
     ['Show S01 to S03 DVDRip', 'seasons 1-3', 'Show'],
@@ -63,6 +72,16 @@ test('years, quality and poor copies are noticed', () => {
   assert.equal(parseRelease('Artist - Album Name [FLAC]').kind, 'unknown');
   assert.equal(parseRelease('1808.S01E03.1080p.WEB').year, null, 'a year that is the title is not a date');
   assert.equal(parseRelease('Wrenfield.Cross.2005.S01.720p').year, 2005);
+  // The year a name gives its show stands before what the release holds. One after that dates the copy.
+  assert.equal(parseRelease('Wrenfield.Cross.2005.S01.720p').showYear, 2005);
+  assert.equal(parseRelease('Kestrelmere (US) (2005) Season 3 S03 (1080p)').showYear, 2005);
+  assert.equal(parseRelease('Wrenfield.Cross.S03.2007.1080p').showYear, null);
+  assert.equal(parseRelease('Wrenfield.Cross.S03.2007.1080p').year, 2007);
+  assert.equal(parseRelease('1808.S01E03.1080p.WEB').showYear, null);
+  assert.deepEqual(parseRelease('Pioneer.One.S05E15E16.1080p').episodes, [15, 16]);
+  assert.deepEqual(parseRelease('Pioneer.One.S01E01-E02.720p').episodes, [1, 2]);
+  assert.equal(parseRelease('Pioneer.One.S01E05.720p').episodes, undefined);
+  assert.equal(parseRelease('Pioneer.One.S01E01-E07.720p').through, 7);
   assert.equal(parseRelease('Sintel.2010.2160p.UHD.BluRay.REMUX').resolution, 2160);
   assert.equal(parseRelease('Show 4K S01').resolution, 2160);
   assert.equal(parseRelease('Show.S01E05.720p').resolution, 720);
@@ -304,4 +323,112 @@ test('a failed search is tolerated unless every search failed', async () => {
   assert.equal((await planShow(partly.search, { title: 'Show' })).plan.torrents, 1, 'what the first search found still stands');
   const down = fakeSearch({ Show: new Error('down'), 'Show complete': new Error('down') });
   await assert.rejects(planShow(down.search, { title: 'Show' }), /down/);
+});
+
+/** An episode guide as a catalogue gives it: how many episodes each season has, all of them aired unless said. */
+const guideOf = (counts, aired = {}) =>
+  new Map(Object.entries(counts).map(([number, episodes]) => [Number(number), { number: Number(number), episodes, aired: aired[number] ?? episodes }]));
+
+test('a show known from a catalogue is not mixed with another of its name', () => {
+  const found = [
+    release('Kestrelmere.US.S01-S09.COMPLETE.1080p.BluRay', 900),
+    release('Kestrelmere (US) (2005) Complete Series S01-S09 1080p', 1600),
+    release('Kestrelmere.UK.S01.720p.BluRay', 200),
+    release('Kestrelmere.UK.S02.720p.BluRay', 200),
+    release('Kestrelmere (2001) Season 1 S01 (720p)', 40),
+    release('Kestrelmere.2005.S01.1080p', 500),
+    release('Kestrelmere.S03E05.720p.HDTV', 90),
+    release('Kestrelmere.S01E02.720p.HDTV', 90),
+  ];
+  const wanted = (known, tagged) => ({ ...parseWanted('Kestrelmere'), keys: ['kestrelmere', tagged], known: { ...known, marks: [tagged] } });
+  const names = (match) => match.releases.map((entry) => entry.title);
+
+  // The British one began in 2001 and has two seasons: not the copies dated 2005, tagged US, or of a third season.
+  const british = matchShow(wanted({ year: 2001, lastSeason: 2, shared: true }, 'kestrelmere uk'), found);
+  assert.deepEqual(names(british), ['Kestrelmere.UK.S01.720p.BluRay', 'Kestrelmere.UK.S02.720p.BluRay', 'Kestrelmere (2001) Season 1 S01 (720p)', 'Kestrelmere.S01E02.720p.HDTV']);
+  // Those that say which show they are, by a country or a year, are marked. The last could be either.
+  assert.deepEqual(british.releases.map((entry) => entry.marked), [true, true, true, false]);
+
+  const american = matchShow(wanted({ year: 2005, lastSeason: 9, shared: true }, 'kestrelmere us'), found);
+  assert.deepEqual(names(american), [
+    'Kestrelmere.US.S01-S09.COMPLETE.1080p.BluRay',
+    'Kestrelmere (US) (2005) Complete Series S01-S09 1080p',
+    'Kestrelmere.2005.S01.1080p',
+    'Kestrelmere.S03E05.720p.HDTV',
+    'Kestrelmere.S01E02.720p.HDTV',
+  ]);
+  // A year apart is the same show, dated by its first showing somewhere else.
+  assert.ok(names(matchShow(wanted({ year: 2004, lastSeason: 9, shared: true }, 'kestrelmere us'), found)).includes('Kestrelmere.2005.S01.1080p'));
+  // Where nothing else has the name, nothing needs marking.
+  assert.equal(matchShow(wanted({ year: 2001, lastSeason: 2, shared: false }, 'kestrelmere uk'), found).releases[0].marked, undefined);
+
+  // A copy that says which show it is beats a better one that does not.
+  const either = [release('Kestrelmere.S01.1080p.BluRay', 900), release('Kestrelmere.2001.S01.720p.BluRay', 40)];
+  const sorted = matchShow(wanted({ year: 2001, lastSeason: 2, shared: true }, 'kestrelmere uk'), either).releases;
+  assert.deepEqual(titles(buildPlan(sorted, { season: 1 })), ['Season 1: Kestrelmere.2001.S01.720p.BluRay']);
+});
+
+test('a piece of a season is not taken for the season', () => {
+  const found = [release('Show.S04.Vol.1.1080p.WEB-DL', 900), release('Show.S04.Vol.2.1080p.WEB-DL', 800), release('Show.S04.720p.BluRay', 50), release('Show.S04E01-E07.1080p', 700)];
+  // A run of episodes from the first is taken for the season, unless a guide says the season is longer.
+  assert.deepEqual(titles(buildPlan(found, { season: 4 })), ['Season 4: Show.S04E01-E07.1080p']);
+  assert.deepEqual(titles(buildPlan(found, { season: 4, guide: guideOf({ 4: 9 }) })), ['Season 4: Show.S04.720p.BluRay']);
+  assert.deepEqual(titles(buildPlan(found, { season: 4, guide: guideOf({ 4: 7 }) })), ['Season 4: Show.S04E01-E07.1080p']);
+});
+
+test('a file with two episodes in it counts for both', () => {
+  const found = [release('Show.S03E01E02.1080p', 30), release('Show.S03E03.1080p', 30), release('Show.S03E04.1080p', 30), release('Show.S03E03E04.1080p', 99)];
+  const plan = buildPlan(found, { season: 3, guide: guideOf({ 3: 4 }) });
+  // Episodes with a copy of their own are not fetched again inside a pair.
+  assert.deepEqual(titles(plan), ['Season 3: 3 single episodes: Show.S03E01E02.1080p + Show.S03E03.1080p + Show.S03E04.1080p']);
+  assert.equal(plan.gaps, undefined, 'the second episode of the pair is not missing');
+  assert.deepEqual(titles(buildPlan(found, { season: 3, episode: 2 })), ['Season 3: 1 single episode: Show.S03E01E02.1080p']);
+  // Where only one of a pair has a copy of its own, the pair is taken for both.
+  const mixed = [release('Show.S03E01.1080p', 30), release('Show.S03E01-E02.1080p', 30)];
+  assert.deepEqual(titles(buildPlan(mixed, { season: 3 })), ['Season 3: 1 single episode: Show.S03E01-E02.1080p']);
+});
+
+test('of a show with one season, a pack of that season is all of it', () => {
+  const found = [release('Show.2019.COMPLETE.720p.BluRay', 700), release('Show.S01.1080p.BluRay', 400), release('Show.S01.2160p.UHD', 900)];
+  // Without a guide, the one that calls itself complete is taken.
+  assert.deepEqual(titles(buildPlan(found)), ['Complete series: Show.2019.COMPLETE.720p.BluRay']);
+  assert.deepEqual(titles(buildPlan(found, { guide: guideOf({ 1: 5 }) })), ['Season 1: Show.S01.1080p.BluRay']);
+  // Not while that season is still being aired: a pack of it cannot hold all of it.
+  assert.deepEqual(titles(buildPlan(found, { guide: guideOf({ 1: 5 }, { 1: 3 }) })), ['Complete series: Show.2019.COMPLETE.720p.BluRay']);
+
+  // What calls itself a miniseries is all of a show that has one season. Of a show that has more, there is no telling what it is.
+  const mini = [release('Show.1980.Miniseries.1080p.BluRay', 100)];
+  assert.deepEqual(titles(buildPlan(mini, { guide: guideOf({ 1: 5 }) })), ['Complete series: Show.1980.Miniseries.1080p.BluRay']);
+  assert.equal(buildPlan(mini, { guide: guideOf({ 1: 13, 2: 20 }) }).torrents, 0);
+  assert.equal(buildPlan(mini).torrents, 0);
+});
+
+test('a guide is taken at its word for how many seasons there are', () => {
+  const seasons = Array.from({ length: 34 }, (unused, i) => i + 1);
+  const found = seasons.map((number) => release(`Show.S${String(number).padStart(2, '0')}.1080p`, 20));
+  assert.equal(buildPlan(found).parts.length, 30, 'numbers read from release names are only believed so far');
+  assert.equal(buildPlan(found, { guide: guideOf(Object.fromEntries(seasons.map((number) => [number, 10]))) }).parts.length, 34);
+});
+
+test('a show that shares its name with a better-known one is searched for by its year and country too', async () => {
+  const table = {
+    Kestrelmere: [['Kestrelmere.US.S01.1080p', 900], ['Kestrelmere (US) (2005) Complete Series S01-S09 1080p', 1600]],
+    'Kestrelmere 2001': [['Kestrelmere (2001) Season 1 S01 (720p)', 40]],
+    'Kestrelmere UK': [['Kestrelmere.UK.S01.720p.BluRay', 200], ['Kestrelmere.UK.S02.720p.BluRay', 200]],
+  };
+  const british = { title: 'Kestrelmere', year: 2001, guide: guideOf({ 1: 6, 2: 6 }), sure: true, shared: true, tagged: ['Kestrelmere UK', 'Kestrelmere GB'] };
+  const crowded = fakeSearch(table);
+  const { plan } = await planShow(crowded.search, { ...british, crowded: true });
+  assert.deepEqual(titles(plan), ['Season 1: Kestrelmere.UK.S01.720p.BluRay', 'Season 2: Kestrelmere.UK.S02.720p.BluRay']);
+  assert.deepEqual(crowded.asked.slice(0, 3), ['Kestrelmere', 'Kestrelmere 2001', 'Kestrelmere UK']);
+  // One season and one episode are looked for the same three ways.
+  const season = fakeSearch(table);
+  await planShow(season.search, { ...british, crowded: true, season: 2 });
+  assert.deepEqual(season.asked.slice(0, 3), ['Kestrelmere S02', 'Kestrelmere 2001 S02', 'Kestrelmere UK S02']);
+
+  // The best known of the name is found under the name alone, and the searches are slow.
+  const alone = fakeSearch(table);
+  const american = await planShow(alone.search, { ...british, year: 2005, guide: guideOf({ 1: 6, 2: 22, 3: 25, 4: 19, 5: 28, 6: 26, 7: 27, 8: 24, 9: 25 }), tagged: ['Kestrelmere US'] });
+  assert.deepEqual(titles(american.plan), ['Complete series: Kestrelmere (US) (2005) Complete Series S01-S09 1080p']);
+  assert.deepEqual(alone.asked, ['Kestrelmere']);
 });

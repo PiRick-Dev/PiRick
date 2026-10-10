@@ -10,7 +10,15 @@ const MAX_SEASONS = 30;
 const COMPLETE_SERIES = /\b(?:complete (?:series|collection|show|saga|box ?set)|(?:full|entire|whole) series|all seasons|integrale)\b/i;
 // "COMPLETE BLURAY" describes a full disc, not a full series.
 const COMPLETE_ALONE = /\bcomplete\b(?! ?(?:bluray|blu ray|uhd|bd|dvd))/i;
+// All of a show that has one season, and of a show that has more, something else: its pilot, or a namesake.
+const MINISERIES = /\b(?:mini ?series|limited series)\b/i;
 const POOR_COPY = /\b(?:CAM|CAMRip|HDCAM|TS|HDTS|TELESYNC|TC|TELECINE|SCR|SCREENER)\b/;
+// A country in brackets after the name tells two shows of one name apart, as it does without them: "Kestrelmere (US)".
+const COUNTRY_IN_BRACKETS = /^((?:\s*\[[^\]]*\])*[^([]*?[\p{L}\p{N}])[\s._]*[([]\s*(US|USA|UK|GB|AU|NZ|CA|IE)\s*[)\]]/u;
+// The first sign of what a release holds. What comes before it is about the show, what comes after about the copy.
+const CONTENTS = /\bS\d{1,2}(?: ?E\d{1,3})?\b|\b(?:Seasons?|Saison|Series) \d|\b\d{1,2}(?:st|nd|rd|th) Season\b|\b\d{1,2}x\d{2,3}\b|\s-\s\d{1,4}\b|\b(?:E|Ep|Episode) ?\d{1,4}\b/i;
+// After a season: a piece of it. "S04 Vol 1", "Season 3 Part 2".
+const PIECE = /^ ?(?:Vol(?:ume)?|Part|Pt) ?\d{1,2}\b/i;
 
 /**
  * Tidies a name that came from the internet, whether an indexer's title for a
@@ -53,35 +61,50 @@ function aliasesOf(raw) {
  *   kind 'series'   every season                      (seasons: [])
  *   kind 'seasons'  several seasons, e.g. S01-S03     (seasons: [1, 2, 3])
  *   kind 'season'   one whole season                  (seasons: [2])
+ *   kind 'part'     a piece of one season             (seasons: [4]: "S04 Vol 1", "S02E05-E09")
  *   kind 'episode'  one episode                       (season may be null: fansub numbering)
  *   kind 'movie'    a film (has a year, no markers)
  *   kind 'unknown'  none of the above
+ *
+ * A file that holds two episodes is an 'episode' whose `episodes` lists both.
+ * A season given as a run of episodes from the first ("S01E01-E10") has
+ * `through`, the last of them. `showYear` is the year the name gives the show,
+ * which stands before what the release holds; `year` is the first year anywhere.
  */
 export function parseRelease(title) {
   const raw = String(title ?? '');
+  const named = raw.replace(COUNTRY_IN_BRACKETS, '$1 $2');
   const text = raw.replace(/[._]+/g, ' ');
-  const show = titleFromRelease(raw);
+  const show = titleFromRelease(named);
   const base = {
     title: raw,
     show,
-    keys: [show, ...aliasesOf(raw)].map(titleKey).filter(Boolean),
+    keys: [show, ...aliasesOf(named)].map(titleKey).filter(Boolean),
     year: yearOf(text),
+    showYear: yearOf(text.slice(0, CONTENTS.exec(text)?.index ?? text.length)),
     resolution: resolutionOf(text),
     poor: POOR_COPY.test(text),
     seasons: [],
     season: null,
     episode: null,
   };
-  const episode = (season, number) => ({ ...base, kind: 'episode', season, episode: Number(number) });
+  const episode = (season, number, more = []) => ({ ...base, kind: 'episode', season, episode: Number(number), ...(more.length && { episodes: [Number(number), ...more] }) });
   const pack = (seasons) => ({ ...base, kind: seasons.length > 1 ? 'seasons' : 'season', seasons });
 
-  // S01E01-E10 is a pack of the season; S01E01-E02 is one double episode.
+  // S01E01-E10 is a pack of the season, S01E05-E09 a piece of it, and S01E01-E02 one double episode.
   let match = /\bS(\d{1,2}) ?E(\d{1,3}) ?(?:-|–|to) ?(?:S\d{1,2} ?)?E?(\d{1,3})\b/i.exec(text);
   if (match) {
     const [season, first, last] = match.slice(1).map(Number);
-    return last - first >= 2 ? pack([season]) : episode(season, first);
+    if (last - first < 2) return episode(season, first, last > first ? [last] : []);
+    return first === 1 ? { ...pack([season]), through: last } : { ...base, kind: 'part', seasons: [season] };
   }
-  match = /\bS(\d{1,2}) ?E(\d{1,3})(?!\d)/i.exec(text) ?? /\b(\d{1,2})x(\d{2,3})\b/i.exec(text);
+  match = /\bS(\d{1,2}) ?E(\d{1,3})(?!\d)/i.exec(text);
+  if (match) {
+    // "S05E15E16": two episodes in one file.
+    const run = /^(?: ?E\d{1,3}(?!\d))+/i.exec(text.slice(match.index + match[0].length))?.[0] ?? '';
+    return episode(Number(match[1]), match[2], [...run.matchAll(/\d+/g)].map(Number));
+  }
+  match = /\b(\d{1,2})x(\d{2,3})\b/i.exec(text);
   if (match) return episode(Number(match[1]), match[2]);
 
   // Several seasons: "S01-S05", "Season 1-5", "Seasons 1 to 5", "S01 S02 S03".
@@ -105,7 +128,8 @@ export function parseRelease(title) {
     const season = Number(match[1]);
     // Fansub style, "Title S2 - 05": a season marker and a bare episode number.
     const numbered = /\s-\s(\d{1,3})(?:v\d)?(?= |$)/.exec(text);
-    return numbered ? episode(season, numbered[1]) : pack([season]);
+    if (numbered) return episode(season, numbered[1]);
+    return PIECE.test(text.slice(match.index + match[0].length)) ? { ...base, kind: 'part', seasons: [season] } : pack([season]);
   }
 
   // No season marker at all: batches, fansub episodes, films.
@@ -115,6 +139,8 @@ export function parseRelease(title) {
   }
   match = /\s-\s(\d{1,4})(?:v\d)?(?= |$)/.exec(text) ?? /\b(?:E|Ep|Episode) ?(\d{1,4})\b/i.exec(text);
   if (match) return episode(null, match[1]);
+  // Only a caller that knows the show has a single season can take this for all of it.
+  if (MINISERIES.test(text)) return { ...base, kind: 'series', certain: false, mini: true };
   return { ...base, kind: base.year ? 'movie' : 'unknown' };
 }
 
@@ -122,13 +148,16 @@ export function parseRelease(title) {
 export function describeContents(parsed) {
   switch (parsed.kind) {
     case 'series':
-      return 'complete series';
+      return parsed.mini ? 'miniseries' : 'complete series';
     case 'seasons':
       return `seasons ${parsed.seasons[0]}-${parsed.seasons.at(-1)}`;
     case 'season':
       return `season ${parsed.seasons[0]}`;
+    case 'part':
+      return `part of season ${parsed.seasons[0]}`;
     case 'episode':
-      return parsed.season == null ? `episode ${parsed.episode}` : `S${pad(parsed.season)}E${pad(parsed.episode)}`;
+      if (parsed.season == null) return `episode ${parsed.episode}`;
+      return `S${pad(parsed.season)}E${pad(parsed.episode)}${parsed.episodes ? `-E${pad(parsed.episodes.at(-1))}` : ''}`;
     default:
       return undefined;
   }
@@ -148,10 +177,27 @@ export function parseWanted(title) {
  *   { others: [names] }    nothing matched, but these similarly named shows were found
  *   { years: [n, n] }      two shows share the name; the caller must say which year
  * `wanted.keys` lists every name the show goes by, when more than the one asked for is known.
+ *
+ * `wanted.known` is set by a caller that knows which show this is, from a
+ * catalogue: `{ year, lastSeason, shared, marks }`. A release that gives its
+ * show another year, or holds a season the show does not have, is then some
+ * other show of the name. When the name is `shared`, a release that says which
+ * show it is, by a year or by one of the names in `marks`, comes back `marked`:
+ * one that does not could be either.
  */
 export function matchShow(wanted, releases) {
   const names = wanted.keys ?? [wanted.key];
-  const exact = releases.filter((release) => release.parsed.keys.some((key) => names.includes(key)));
+  const { known } = wanted;
+  const named = releases.filter((release) => release.parsed.keys.some((key) => names.includes(key)));
+  // A year apart is the same show, dated by its first showing somewhere else.
+  const theirs = ({ parsed }) =>
+    (known.year == null || parsed.showYear == null || Math.abs(parsed.showYear - known.year) <= 1) && Math.max(0, ...parsed.seasons, parsed.season ?? 0) <= known.lastSeason;
+  const exact = known ? named.filter(theirs) : named;
+  if (known) {
+    if (!known.shared) return { releases: exact };
+    const marks = known.marks ?? [];
+    return { releases: exact.map((release) => ({ ...release, marked: release.parsed.showYear != null || release.parsed.keys.some((key) => marks.includes(key)) })) };
+  }
   if (!exact.length) {
     const counts = new Map();
     for (const { parsed } of releases) {
@@ -184,9 +230,9 @@ export function matchShow(wanted, releases) {
 
 const healthy = (release) => release.seeders >= HEALTHY_SEEDERS;
 
-/** The better of two copies: healthy first, then the wanted quality, then the most seeders. */
+/** The better of two copies: healthy first, then one that says which show it is where that is in doubt, then the wanted quality, then the most seeders. */
 function better(a, b, quality) {
-  const rank = (release) => [healthy(release) ? 1 : 0, release.parsed.resolution === quality ? 1 : 0, release.seeders];
+  const rank = (release) => [healthy(release) ? 1 : 0, release.marked ? 1 : 0, release.parsed.resolution === quality ? 1 : 0, release.seeders];
   const [x, y] = [rank(a), rank(b)];
   for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i] ? a : b;
   return a;
@@ -196,6 +242,8 @@ export const best = (releases, quality) => releases.reduce((a, b) => better(a, b
 
 /** The last season of which anything has aired, going by an episode guide. */
 export const lastAired = (guide) => Math.max(0, ...[...guide].filter(([, season]) => season.aired > 0).map(([number]) => number));
+/** The last season to plan for. A guide is taken at its word; numbers read from release names are not, beyond a point. */
+const lastOf = (guide, seen) => (guide ? lastAired(guide) : Math.min(Math.max(0, ...seen), MAX_SEASONS));
 
 /**
  * Chooses the fewest downloads that cover a show (or one season of it):
@@ -212,27 +260,44 @@ export const lastAired = (guide) => Math.max(0, ...[...guide].filter(([, season]
 export function buildPlan(releases, { season = null, episode = null, quality = 1080, maxBytes = 0, guide = null } = {}) {
   const usable = releases.filter((release) => release.seeders > 0 && !(maxBytes && release.size > maxBytes));
   const laterSeasons = usable.some(({ parsed }) => (parsed.seasons.at(-1) ?? parsed.season ?? 0) >= 2);
+  // A show the guide gives one season: what calls itself a miniseries is all of it. Of any other, it is not known what it is.
+  const oneSeason = guide?.size === 1 && guide.has(1);
 
   const series = [];
   const multi = [];
   const packs = new Map(); // season -> packs of exactly that season
   const episodes = new Map(); // season -> Map(episode -> best copy)
+  const doubles = [];
   const push = (map, key, value) => map.set(key, [...(map.get(key) ?? []), value]);
+  // Fansub releases number the first season's episodes without a season.
+  const copiesOf = ({ parsed }) => episodes.get(parsed.season ?? 1) ?? episodes.set(parsed.season ?? 1, new Map()).get(parsed.season ?? 1);
   for (const release of usable) {
     const { parsed } = release;
     if (parsed.kind === 'series') {
+      if (parsed.mini && !oneSeason) continue;
       // An unlabelled batch of a show that has later seasons is its first season.
       if (parsed.certain || !laterSeasons) series.push(release);
       else push(packs, 1, release);
     } else if (parsed.kind === 'seasons') multi.push(release);
-    else if (parsed.kind === 'season') push(packs, parsed.seasons[0], release);
-    else if (parsed.kind === 'episode') {
-      // Fansub releases number the first season's episodes without a season.
-      const number = parsed.season ?? 1;
-      const copies = episodes.get(number) ?? episodes.set(number, new Map()).get(number);
-      const current = copies.get(parsed.episode);
-      copies.set(parsed.episode, current ? better(current, release, quality) : release);
+    else if (parsed.kind === 'season') {
+      // A run of episodes from the first is the season only if it reaches the last that has aired.
+      const short = parsed.through != null && guide?.has(parsed.seasons[0]) && parsed.through < guide.get(parsed.seasons[0]).aired;
+      if (!short) push(packs, parsed.seasons[0], release);
+    } else if (parsed.kind === 'episode') {
+      if (parsed.episodes) doubles.push(release);
+      else {
+        const copies = copiesOf(release);
+        const current = copies.get(parsed.episode);
+        copies.set(parsed.episode, current ? better(current, release, quality) : release);
+      }
     }
+  }
+  // A file with two episodes in it is used when one of them has no copy of its own, and then for both, so neither comes twice.
+  for (const release of doubles) {
+    const copies = copiesOf(release);
+    const own = (part) => copies.has(part) && !copies.get(part).parsed.episodes;
+    if (release.parsed.episodes.every(own)) continue;
+    for (const part of release.parsed.episodes) copies.set(part, copies.has(part) && !own(part) ? better(copies.get(part), release, quality) : release);
   }
 
   // A season still being aired: a pack of it cannot hold all of it, while its episodes one by one keep up.
@@ -240,7 +305,7 @@ export function buildPlan(releases, { season = null, episode = null, quality = 1
 
   function coverSeason(number) {
     const pack = packs.has(number) ? best(packs.get(number), quality) : null;
-    const singles = [...(episodes.get(number) ?? new Map()).entries()].sort((a, b) => a[0] - b[0]).map(([, release]) => release);
+    const singles = [...new Set([...(episodes.get(number) ?? new Map()).entries()].sort((a, b) => a[0] - b[0]).map(([, release]) => release))];
     if (airing(number) && singles.length) return { type: 'episodes', seasons: [number], releases: singles };
     if (pack && healthy(pack)) return { type: 'season', seasons: [number], releases: [pack] };
     // A weak pack only loses to single episodes when most of those are healthy.
@@ -253,7 +318,7 @@ export function buildPlan(releases, { season = null, episode = null, quality = 1
   function finish(parts, missing = []) {
     const gaps = [];
     for (const part of guide && episode == null ? parts.filter((entry) => entry.type === 'episodes') : []) {
-      const have = new Set(part.releases.map((release) => release.parsed.episode));
+      const have = new Set(part.releases.flatMap((release) => release.parsed.episodes ?? [release.parsed.episode]));
       const lacking = range(1, guide.get(part.seasons[0])?.aired ?? 0).filter((number) => !have.has(number));
       if (lacking.length) gaps.push({ season: part.seasons[0], episodes: lacking });
     }
@@ -271,10 +336,12 @@ export function buildPlan(releases, { season = null, episode = null, quality = 1
   }
 
   const seen = [...packs.keys(), ...episodes.keys(), ...multi.flatMap(({ parsed }) => parsed.seasons)];
-  const lastSeason = Math.min(guide ? lastAired(guide) : Math.max(0, ...seen), MAX_SEASONS);
+  const lastSeason = lastOf(guide, seen);
+  // Of a show with one season, a pack of that season is all of it, whatever it calls itself.
+  const only = oneSeason && !airing(1) ? (packs.get(1) ?? []) : [];
   // A range such as S01-S05 that spans every season seen is a complete pack too.
-  const whole = [...series, ...multi.filter(({ parsed }) => parsed.seasons[0] <= 1 && parsed.seasons.at(-1) >= lastSeason && lastSeason > 0)];
-  const wholePart = (release) => ({ type: 'series', seasons: [], releases: [release] });
+  const whole = [...series, ...multi.filter(({ parsed }) => parsed.seasons[0] <= 1 && parsed.seasons.at(-1) >= lastSeason && lastSeason > 0), ...only];
+  const wholePart = (release) => (only.includes(release) ? { type: 'season', seasons: [1], releases: [release] } : { type: 'series', seasons: [], releases: [release] });
   if (whole.some(healthy)) return finish([wholePart(best(whole.filter(healthy), quality))]);
 
   const uncovered = new Set(range(1, lastSeason));
@@ -309,7 +376,7 @@ async function searchAll(search, queries, atOnce) {
   const found = new Map();
   let failure = null;
   for (let i = 0; i < queries.length; i += atOnce) {
-    const batch = await Promise.allSettled(queries.slice(i, i + atOnce).map((query) => search(query)));
+    const batch = await Promise.allSettled(queries.slice(i, i + atOnce).map(({ query, title }) => search(query, title)));
     for (const result of batch) {
       if (result.status === 'rejected') {
         failure = result.reason;
@@ -328,7 +395,8 @@ async function searchAll(search, queries, atOnce) {
 
 /**
  * Finds the best way to get a show, one season of it, or one episode.
- * `search(query)` returns releases ({ title, size, seeders, infoHash, ... }).
+ * `search(query, title)` returns releases ({ title, size, seeders, infoHash, ... });
+ * `title` is the part of the query that is the show's name.
  * `skip(release)` can rule copies out. `atOnce` is how many searches may run
  * together. Resolves to `{ plan }`, `{ others }` or `{ years }` (see matchShow).
  *
@@ -339,15 +407,45 @@ async function searchAll(search, queries, atOnce) {
  *
  * A caller that knows more about the show says so: `names` are the other
  * names it goes by, `year` the year it began, and `guide` its episode guide
- * (see buildPlan).
+ * (see buildPlan). One that knows which show it is, from a catalogue, is `sure`,
+ * and then says whether other shows have the name (`shared`), whether one of
+ * them is the better known (`crowded`), and how release names tell this one
+ * from them: `tagged`, its name with its country after it. `fansub` says its
+ * episodes may be released the way anime is, numbered with no season.
  */
 export async function planShow(
   search,
-  { title, season = null, episode = null, quality = 1080, maxBytes = 0, skip = () => false, settled = new Set(), inParts = false, atOnce = 1, names = [], year = null, guide = null },
+  {
+    title,
+    season = null,
+    episode = null,
+    quality = 1080,
+    maxBytes = 0,
+    skip = () => false,
+    settled = new Set(),
+    inParts = false,
+    atOnce = 1,
+    names = [],
+    year = null,
+    guide = null,
+    sure = false,
+    shared = false,
+    crowded = false,
+    tagged = [],
+    fansub = false,
+  },
 ) {
   const wanted = parseWanted(title);
   wanted.year ??= year;
-  if (names.length) wanted.keys = [...new Set([wanted.key, ...names.map(titleKey)].filter(Boolean))];
+  const keys = (list) => list.map(titleKey).filter(Boolean);
+  if (names.length || tagged.length) wanted.keys = [...new Set([wanted.key, ...keys(names), ...keys(tagged)])].filter(Boolean);
+  if (sure) wanted.known = { year, lastSeason: guide ? Math.max(...guide.keys()) : Infinity, shared, marks: keys(tagged) };
+  // Under a name it shares with a better-known show, that show fills every answer. Release names
+  // tell the two apart by a year or a country after the name, so it is searched for those ways as well.
+  const apart = sure && crowded ? [year == null ? null : `${wanted.name} ${year}`, tagged[0]].filter(Boolean) : [];
+  // What is searched for is a name and, after it, what is wanted of the show. The search is told which part is the name.
+  const under = (name, rest = '') => ({ query: `${name}${rest}`, title: name });
+  const asked = (rest = '') => [wanted.name, ...apart].map((name) => under(name, rest));
   const options = { season, episode, quality, maxBytes, guide };
   let found = [];
   let releases = [];
@@ -371,24 +469,30 @@ export async function planShow(
     return null;
   }
   const goodPack = (type) => plan.parts.length === 1 && plan.parts[0].type === type && healthy(plan.parts[0].releases[0]);
+  // All of the show in one good pack: a complete one, or the one season of a show that has no other.
+  const allInOne = () => goodPack('series') || (guide?.size === 1 && goodPack('season'));
 
   let unclear;
   if (episode != null) {
-    unclear = await look([`${wanted.name} ${season == null ? pad(episode) : `S${pad(season)}E${pad(episode)}`}`]);
+    unclear = await look(asked(` ${season == null ? pad(episode) : `S${pad(season)}E${pad(episode)}`}`));
+    // Fansub releases number the episodes of a first season with no season: "Title - 05".
+    if (!unclear && !plan.torrents && fansub && season === 1) unclear = await look([under(wanted.name, ` ${pad(episode)}`)]);
+    // It may only exist in one file with the episode before it, which a search for it alone does not find.
+    if (!unclear && !plan.torrents && season != null) unclear = await look([under(wanted.name, ` S${pad(season)}`)]);
   } else if (season != null) {
-    unclear = await look([`${wanted.name} S${pad(season)}`]);
+    unclear = await look(asked(` S${pad(season)}`));
     // Some packs are only ever labelled "Season 2".
-    if (!unclear && !goodPack('season')) unclear = await look([`${wanted.name} season ${season}`]);
+    if (!unclear && !goodPack('season')) unclear = await look([under(wanted.name, ` season ${season}`)]);
   } else {
-    unclear = await look([wanted.name]);
-    if (!unclear && !inParts && !goodPack('series')) unclear = await look([`${wanted.name} complete`]);
-    if (!unclear && !goodPack('series')) {
+    unclear = await look(asked());
+    if (!unclear && !inParts && !allInOne()) unclear = await look([under(wanted.name, ' complete')]);
+    if (!unclear && !allInOne()) {
       // No good complete pack: look at each season that still lacks a good pack of its own.
       const seen = releases.flatMap(({ parsed }) => (parsed.seasons.length ? parsed.seasons : [parsed.season ?? 1]));
-      const lastSeason = Math.min(guide ? lastAired(guide) : Math.max(0, ...seen), MAX_SEASONS);
+      const lastSeason = lastOf(guide, seen);
       const covered = new Set(plan.parts.filter((part) => part.type !== 'episodes' && part.releases.every(healthy)).flatMap((part) => part.seasons));
       const seasons = range(1, lastSeason).filter((number) => !covered.has(number) && !settled.has(number));
-      if (seasons.length) unclear = await look(seasons.map((number) => `${wanted.name} S${pad(number)}`));
+      if (seasons.length) unclear = await look(seasons.map((number) => under(wanted.name, ` S${pad(number)}`)));
     }
   }
   return unclear ?? { plan, show: releases[0]?.parsed.show ?? wanted.name };

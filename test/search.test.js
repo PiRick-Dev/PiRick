@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { titleKey } from '../src/folders.js';
-import { canonicalWords, createFinder, queryVariants, relevantResults, withoutTrailingWords } from '../src/search.js';
+import { canonicalWords, createFinder, queryVariants, relevantResults, unaccented, withoutTrailingWords } from '../src/search.js';
 
 // What an indexer returns for "7 chances": episodes numbered 07, and not the 1925 film "Seven Chances".
 const JUNK_FOR_7_CHANCES = [
@@ -46,6 +46,9 @@ test('other spellings of a title are worked out', () => {
     "Harlan's 11": ["Harlan's eleven", "Harlan's XI"],
     'Salt & Iron': ['Salt and Iron'],
     'Wren Part Two 2024 1080p': ['Wren Part 2 2024 1080p'],
+    // The number of a season is not part of a title, though a number before it is.
+    'Copperhollow season 2': [],
+    '7 Harbours season 2': ['seven Harbours season 2'],
     // Nothing to respell: years, resolutions and episode markers are left alone.
     'The General 1926': [],
     '2001 A Harbour Year': [],
@@ -176,6 +179,36 @@ test('callers that judge relevance themselves get whatever the first fruitful sp
   assert.deepEqual(titles(all), ['Unrelated', 'Show.Two.S01.720p'], 'unfiltered, best-seeded first, dead copies dropped');
   assert.deepEqual(jackett.asked, ['show 2 S01', 'show two S01']);
   assert.deepEqual(tried, jackett.asked, 'each search is announced, for the progress display');
+});
+
+test('a name with accents is searched for in plain letters, and as written only if that finds nothing', async () => {
+  assert.equal(unaccented('Señora Marisol è là'), 'Senora Marisol e la');
+  assert.equal(unaccented('Copperhollow'), 'Copperhollow');
+  const found = async (table, query) => {
+    const jackett = fakeJackett(table);
+    return { ...(await createFinder(jackett, { retryCachedEmpty: false }).search(query, [5000], { filter: false })), asked: jackett.asked };
+  };
+  // Release names have no accents, and not every indexer takes one letter for the other.
+  const plain = await found({ 'Senora Marisol S01': [['Senora.Marisol.S01.1080p', 30]] }, 'Señora Marisol S01');
+  assert.deepEqual([titles(plain.results), plain.asked, plain.also], [['Senora.Marisol.S01.1080p'], ['Senora Marisol S01'], []]);
+  const written = await found({ 'Señora Marisol S01': [['Señora Marisol (2021) Season 1', 4]] }, 'Señora Marisol S01');
+  assert.deepEqual([titles(written.results), written.asked], [['Señora Marisol (2021) Season 1'], ['Senora Marisol S01', 'Señora Marisol S01']]);
+  assert.deepEqual(written.also, ['Señora Marisol S01']);
+});
+
+test('told which part of a query is the title, other spellings are tried of that part only', async () => {
+  const table = { 'seven Harbours 05': [['[Subs] Seven Harbours - 05 (1080p)', 12]] };
+  const titled = fakeJackett(table);
+  const { results: found } = await createFinder(titled, { retryCachedEmpty: false }).search('7 Harbours 05', [5000], { filter: false, title: '7 Harbours' });
+  assert.deepEqual(titles(found), ['[Subs] Seven Harbours - 05 (1080p)']);
+  assert.deepEqual(titled.asked, ['7 Harbours 05', 'seven Harbours 05'], 'the episode number is not spelled out');
+  // Without being told, every number in it is taken for part of a title.
+  const untold = fakeJackett({});
+  await createFinder(untold, { retryCachedEmpty: false }).search('Copperhollow 05', [5000], { filter: false });
+  assert.deepEqual(untold.asked, ['Copperhollow 05', 'Copperhollow five']);
+  const told = fakeJackett({});
+  await createFinder(told, { retryCachedEmpty: false }).search('Copperhollow 05', [5000], { filter: false, title: 'Copperhollow' });
+  assert.deepEqual(told.asked, ['Copperhollow 05']);
 });
 
 test('an instant empty answer is Jackett’s cache talking, so it is asked again in other capitals', async () => {

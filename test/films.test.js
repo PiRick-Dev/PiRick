@@ -70,9 +70,15 @@ test('a film is searched for under its proper title and year, whatever was typed
     assert.equal(misspelt.record.statuses[0], 'Took “the cabnet of dr caligary” to be The Cabinet of Dr. Caligari (1920)');
 
     // Another language's title, and what a film follows.
+    // Another language's title. Copies go by that name too, so it is searched as well, and what both find is offered.
     const spanish = await chat.say('El acorazado Potemkin?', [film('El acorazado Potemkin')], 'Shall I get it?');
-    assert.equal(chat.world.trace().searches.at(-1), 'Battleship Potemkin 1925');
+    assert.deepEqual(chat.world.trace().searches.slice(-2), ['Battleship Potemkin 1925', 'El acorazado Potemkin 1925']);
     assert.match(spanish.outputs[0].catalogue, /^This is Battleship Potemkin \(1925\), directed by Sergei Eisenstein\.$/);
+    assert.deepEqual(
+      spanish.outputs[0].results.map((result) => result.title),
+      ['Battleship.Potemkin.1925.1080p.BluRay.x264-GRP', 'El.Acorazado.Potemkin.1925.1080p.BluRay.x264.Spanish-GRP', 'Battleship.Potemkin.1925.720p.BluRay.x264-GRP'],
+    );
+    assert.deepEqual(spanish.record.statuses, ['Searched for “Battleship Potemkin 1925” and 1 other spelling: 3 results']);
     const sequel = await chat.say('Caminandes Gran Dillama?', [film('Caminandes Gran Dillama')], 'Shall I get it?');
     assert.match(sequel.outputs[0].catalogue, /It follows Caminandes: Llama Drama \(2013\) and is followed by Caminandes: Llamigos \(2016\)\.$/);
     assert.ok(sequel.outputs[0].results.every((result) => result.title.startsWith('Caminandes.2.')));
@@ -315,6 +321,54 @@ test('a description never sits beside a download id', async () => {
     assert.ok(outputs[0].results.length > 0 && outputs[0].results.every((result) => result.id));
     assert.equal(JSON.stringify(outputs[0]).includes('Count Orlok'), false);
     assert.equal(outputs[0].catalogue, 'This is Nosferatu (1922), directed by F. W. Murnau, with Max Schreck.');
+  } finally {
+    chat.close();
+  }
+});
+
+test('a new film with the name of an old one is offered beside it, however well known the films named after them', async () => {
+  const later = ['Undertow', 'Landfall', 'Deep Water', 'The Long Dark', 'Riptide', 'Last Light', 'Breakwater', 'Low Tide'];
+  const films = [
+    { title: 'Harrow Deep', year: 2002, known: 57, directors: ['Ines Carrow'] },
+    { title: 'Harrow Deep', year: 2025, known: 27, directors: ['Tobin Marsh'] },
+    ...later.map((name, i) => ({ title: `Harrow Deep: ${name}`, year: 2004 + i, known: 40 + i })),
+  ];
+  const chat = talkTo({ catalogue: { films } });
+  try {
+    const which = await chat.say('Get Harrow Deep', [film('Harrow Deep')], 'The one from 2002, or the new one?');
+    assert.deepEqual(which.outputs[0].which_one, ['Harrow Deep (2002), directed by Ines Carrow', 'Harrow Deep (2025), directed by Tobin Marsh']);
+    assert.deepEqual(chat.world.trace().searches, [], 'nothing is searched for until it is known which');
+  } finally {
+    chat.close();
+  }
+});
+
+test('a little-known film does not stand in for a well-known show of the same name', async () => {
+  const chat = talkTo({
+    catalogue: {
+      films: [{ title: 'Saltmarsh', year: 2016, known: 5, directors: ['Ines Carrow'] }],
+      shows: [{ id: 1, name: 'Saltmarsh', year: 2023, weight: 100, country: 'US', seasons: { 1: 9, 2: 7 } }],
+    },
+  });
+  const SHOW = 'The catalogue lists Saltmarsh (2023) as a TV show, far better known than the film of the same name, Saltmarsh (2016).';
+  try {
+    // Asked for with no kind given: the show is pointed out, and the search made as asked, not for the film.
+    const any = await chat.say('Find Saltmarsh', [call('search_media', { query: 'Saltmarsh', media_type: 'any' })], 'Do you mean the show?');
+    assert.equal(any.outputs[0].catalogue, `${SHOW} If the show is what the user wants, call find_show for it.`);
+    assert.deepEqual(chat.world.trace().searches, ['Saltmarsh']);
+
+    // Asked for as a film: nothing is searched for until it is known that the film is meant.
+    const sure = await chat.say('The film Saltmarsh', [film('Saltmarsh')], 'Do you mean the show, or the film from 2016?');
+    assert.deepEqual(sure.outputs[0], {
+      results: [],
+      catalogue: SHOW,
+      note: 'Nothing was searched for. If the user means the show, call find_show for it instead. If they do mean the film, call search_media again with its year: Saltmarsh 2016.',
+    });
+    assert.deepEqual(chat.world.trace().searches, ['Saltmarsh']);
+
+    const meant = await chat.say('The film from 2016', [film('Saltmarsh 2016')], 'I could not find a copy of it.');
+    assert.equal(meant.outputs[0].catalogue, 'This is Saltmarsh (2016), directed by Ines Carrow.');
+    assert.equal(chat.world.trace().searches.at(-1), 'Saltmarsh 2016');
   } finally {
     chat.close();
   }

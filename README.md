@@ -121,6 +121,7 @@ Indexers match release names literally, and they are not careful with numbers. A
 - **Other spellings.** If a search finds nothing suitable, PiRick tries the title's other common spellings: digits as words and words as digits (`7 chances` and `seven chances`), a sequel number as a roman numeral (`Part 2` and `Part II`), and `&` as `and`. The chat line then reads `Searched for “7 chances” (found as “seven chances”)`.
 - **Only relevant results.** Results are kept only if the release name contains the title that was asked for, with its words together and in order. When a year is given, copies from that year win. If nothing clearly matches, the model is told so and warned not to pick from what came back.
 - **Extra words dropped.** Release names do not contain cast or crew. The model is told to search by title and year alone; if a search with extra words after the year still finds nothing, PiRick retries without them.
+- **Plain letters.** Release names are written without accents, and not every indexer takes "é" for "e". A title with accents is searched for without them, and as it was written only if that finds nothing.
 
 **Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. An advert that is named like an ordinary copy cannot be told by a rule like this. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
 
@@ -151,7 +152,8 @@ Things to know:
 
 - Without a catalogue, PiRick has no episode guide. If a season should have ten episodes and the indexers only have eight as single files, it gets the eight and cannot tell that two are missing. With one it can: see "A catalogue of what exists".
 - When two different shows share a name (say a 1963 and a 2005 series), PiRick does not mix them: it asks which one is meant.
-- Release names that cannot be read (unusual naming) are left out of these plans.
+- A piece of a season is not taken for the season: `S04.Vol.1`, `Season 3 Part 2`, or a run of episodes that does not start at the first. A file that holds two episodes (`S03E01E02`) counts for both.
+- Release names that cannot be read (unusual naming) are left out of these plans. So are those of daily shows, which are named by the date.
 
 ## Upkeep: finished and stuck downloads
 
@@ -239,10 +241,10 @@ There is no account and no key. Films and people are looked up in [Wikidata](htt
 
 | The catalogue says | What PiRick does |
 |---|---|
-| One film, or one far better known than its namesakes | Searches once, under the proper title and year. A misspelling, another language's title or a wrong year no longer costs extra searches, and a wrong year is said to be wrong. |
+| One film, or one far better known than its namesakes | Searches under the proper title and year. A misspelling or a wrong year no longer costs extra searches, and a wrong year is said to be wrong. A film asked for by another of its names, such as "El acorazado Potemkin" for Battleship Potemkin, is searched for under that name as well, since copies go by both. |
 | Several films share the name | Searches for nothing yet. The assistant gets up to five, each with its year, director and cast, and either matches what the person said ("the one with John Barrymore") or asks. |
 | Not out yet | Searches for nothing, since a copy offered before release is a fake. Says when it is due. The person can say to look anyway. |
-| It is a show | Has the assistant treat it as one. |
+| It is a show | Has the assistant treat it as one. A little-known film does not stand in for a far better known show of the same name: the assistant is told of both. |
 | Nothing by that name | Searches once, and says it could not be found. |
 
 **Shows.** The catalogue supplies the episode guide PiRick otherwise lacks:
@@ -250,7 +252,8 @@ There is no account and no key. Films and people are looked up in [Wikidata](htt
 - A plan covers every season that has aired. A season nobody has a copy of is reported as not found, and so are single episodes: "season 3: episodes 7 and 8".
 - What has not aired yet is told apart from what could not be found. A season still being shown is fetched episode by episode.
 - "The latest season" is worked out by PiRick. A season or episode that does not exist is said not to.
-- Two shows with one name are told apart by year or country before anything is searched for.
+- Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer.
+- Of a show with one season, a pack of that season is all of it, whether or not it calls itself complete.
 - A show's folder is named by the catalogue, so it is the same every time, and a folder it already has under another of its names is reused. PiRick no longer asks whether "The Vampires" belongs in "Les Vampires".
 - With Plex connected, PiRick knows whether Plex has all of a season. A complete season is reported as there. Of a partial one, only the missing episodes are fetched.
 

@@ -28,7 +28,7 @@ const hashOf = (title) => createHash('sha1').update(title).digest('hex');
 const pad = (number) => String(number).padStart(2, '0');
 
 /** One release as Jackett would report it. */
-function release(title, seeders, sizeGb, categories = MOVIE, daysOld = 400) {
+export function release(title, seeders, sizeGb, categories = MOVIE, daysOld = 400) {
   const infoHash = hashOf(title);
   return {
     title,
@@ -177,19 +177,7 @@ export const RELEASES = [
   ...[1, 2, 3].map((number) => release(`[Subs] Starfall Courier - ${pad(number)} (1080p) [5E1A9C0${number}]`, 60 - number, 1.4, ANIME)),
 ];
 
-const BY_HASH = new Map(RELEASES.map((entry) => [entry.infoHash, entry]));
-
-/** The release with this info hash, or undefined. */
-export const byHash = (infoHash) => BY_HASH.get(infoHash);
-/** The release with exactly this name. Throws on a typo, so scenarios cannot silently refer to nothing. */
-export function byTitle(title) {
-  const found = RELEASES.find((entry) => entry.title === title);
-  if (!found) throw new Error(`No release named "${title}" in the benchmark corpus`);
-  return found;
-}
-
 const words = (text) => String(text).toLowerCase().replace(/['’]/g, '').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-const INDEX = RELEASES.map((entry) => ({ entry, words: new Set(words(entry.title)), list: words(entry.title) }));
 
 /** "S02" also finds "S02E05", as it does on real indexers. */
 const has = (indexed, word) => indexed.words.has(word) || (/^s\d{1,2}$/.test(word) && indexed.list.some((other) => other.startsWith(`${word}e`)));
@@ -199,14 +187,35 @@ const inCategory = (entry, wanted) =>
   !wanted.length || wanted.some((id) => entry.categories.some((own) => (id % 1000 === 0 ? Math.floor(own / 1000) === id / 1000 : own === id)));
 
 /**
- * Releases whose names contain every word of the query, best-seeded first.
- * Like a real indexer, it knows nothing about actors, plots or spelling.
+ * A stand-in indexer that has `releases` and no others, and gives at most
+ * `most` results to a search: `{ search, byHash, byTitle }`.
  */
-export function search(query, categories = []) {
-  const wanted = words(query);
-  if (!wanted.length) return [];
-  return INDEX.filter((indexed) => inCategory(indexed.entry, categories) && wanted.every((word) => has(indexed, word)))
-    .map((indexed) => ({ ...indexed.entry }))
-    .sort((a, b) => b.seeders - a.seeders)
-    .slice(0, 50);
+export function corpusOf(releases, { most = 50 } = {}) {
+  const hashes = new Map(releases.map((entry) => [entry.infoHash, entry]));
+  const index = releases.map((entry) => ({ entry, words: new Set(words(entry.title)), list: words(entry.title) }));
+  return {
+    /** The release with this info hash, or undefined. */
+    byHash: (infoHash) => hashes.get(infoHash),
+    /** The release with exactly this name. Throws on a typo, so scenarios cannot silently refer to nothing. */
+    byTitle(title) {
+      const found = releases.find((entry) => entry.title === title);
+      if (!found) throw new Error(`No release named "${title}" in the benchmark corpus`);
+      return found;
+    },
+    /**
+     * Releases whose names contain every word of the query, best-seeded first.
+     * Like a real indexer, it knows nothing about actors, plots or spelling.
+     */
+    search(query, categories = []) {
+      const wanted = words(query);
+      if (!wanted.length) return [];
+      return index
+        .filter((indexed) => inCategory(indexed.entry, categories) && wanted.every((word) => has(indexed, word)))
+        .map((indexed) => ({ ...indexed.entry }))
+        .sort((a, b) => b.seeders - a.seeders)
+        .slice(0, most);
+    },
+  };
 }
+
+export const { byHash, byTitle, search } = corpusOf(RELEASES);

@@ -330,7 +330,7 @@ test('choosing among things with the same name', () => {
   // Nothing tells them apart: best known first.
   assert.deepEqual(pick(jekylls, wanted('Dr Jekyll and Mr Hyde')).several.map((entry) => entry.id), [1, 2, 3]);
   // A year does.
-  assert.deepEqual(pick(jekylls, wanted('Dr Jekyll and Mr Hyde', { year: 1920 })), { one: jekylls[0], others: 0 });
+  assert.deepEqual(pick(jekylls, wanted('Dr Jekyll and Mr Hyde', { year: 1920 })), { one: jekylls[0], others: 0, shared: true });
   // The exact year wins over the one next to it, which is otherwise near enough.
   assert.equal(pick(jekylls, wanted('Dr Jekyll and Mr Hyde', { year: 1913 })).one.id, 3);
   assert.equal(pick(jekylls, wanted('Dr Jekyll and Mr Hyde', { year: 1921 })).one.id, 1);
@@ -341,8 +341,8 @@ test('choosing among things with the same name', () => {
 
   // One far better known than its namesake is taken, and the namesake counted.
   const charades = [thing(1, 'Charade', 1953, 3), thing(2, 'Charade', 1963, 51)];
-  assert.deepEqual(pick(charades, wanted('charade')), { one: charades[1], others: 1 });
-  assert.deepEqual(pick(charades, wanted('Charade', { year: 1965 })), { one: charades[1], others: 1, wrongYear: true });
+  assert.deepEqual(pick(charades, wanted('charade')), { one: charades[1], others: 1, shared: true });
+  assert.deepEqual(pick(charades, wanted('Charade', { year: 1965 })), { one: charades[1], others: 1, wrongYear: true, shared: true });
   // Two and a half times as well known is far enough; not quite twice is not.
   assert.equal(pick([thing(1, 'Charade', 1927, 22), thing(2, 'Charade', 2017, 59)], wanted('Charade')).one.id, 2);
   assert.ok(pick([thing(1, 'Charade', 1960, 32), thing(2, 'Charade', 2001, 60)], wanted('Charade')).several);
@@ -365,6 +365,10 @@ test('choosing among things with the same name', () => {
   // Country and year, for two shows with one name.
   assert.equal(pick(shows, wanted('Kestrelmere', { country: 'GB' }), byWeight).one.id, 2);
   assert.equal(pick(shows, wanted('Kestrelmere', { year: 2005 }), byWeight).one.id, 1);
+  // Whichever is chosen, it is said that another has the name, and whether that one is the better known.
+  assert.deepEqual(pick(shows, wanted('Kestrelmere', { country: 'GB' }), byWeight), { one: shows[1], others: 0, shared: true, outshone: true });
+  assert.deepEqual(pick(shows, wanted('Kestrelmere', { year: 2005 }), byWeight), { one: shows[0], others: 0, shared: true });
+  assert.deepEqual(pick([shows[0]], wanted('Kestrelmere'), byWeight), { one: shows[0], others: 0 });
 
   // A misspelling is only believed when nothing has the name as given.
   const near = [thing(1, 'Brindlemoor', 2015, 80), thing(2, 'Brindelmoor', 1999, 3)];
@@ -620,6 +624,24 @@ test('a misspelt show is found, and letters that only look like a country are tr
   const whole = await clientFor(server).findShow({ title: 'Harbour Watch CA' });
   assert.equal(whole.one.title, 'Harbour Watch CA');
   assert.equal(whole.inexact, undefined);
+});
+
+test('the names a show could be released under are told from what it is called abroad', async () => {
+  const show = {
+    id: 1,
+    name: 'Hoshi no Fune',
+    akas: ['Ship of Stars', '星の船'],
+    abroad: [{ name: 'Hoshi no Fune Zoku', country: 'JP' }, { name: 'Звёздный корабль', country: 'RU' }, { name: 'Csillaghajo', country: 'HU' }],
+    year: 2021,
+    weight: 60,
+    country: 'JP',
+    seasons: { 1: 12 },
+  };
+  const { one } = await clientFor(catalogueStandIn({ shows: [show] })).findShow({ title: 'Hoshi no Fune' });
+  // Every name is one to recognise it by.
+  assert.deepEqual(one.names, ['Hoshi no Fune', 'Ship of Stars', '星の船', 'Hoshi no Fune Zoku', 'Звёздный корабль', 'Csillaghajo']);
+  // To look for it: those it has everywhere or where it was made, in letters release names are written in.
+  assert.deepEqual(one.ownNames, ['Hoshi no Fune', 'Ship of Stars', 'Hoshi no Fune Zoku']);
 });
 
 test('when it is not known whether a name is a film or a show, both are looked at', async () => {
