@@ -169,9 +169,10 @@ export function createPlex(config, { fetch: send = fetch } = {}) {
 
     /**
      * The show Plex has under this title and which episodes of it:
-     * `{ title, year, seasons }`, where `seasons` maps a season number to the
-     * set of its episode numbers. Null when Plex has no such show, or has two
-     * different ones and nothing says which is meant.
+     * `{ title, year, seasons, folders }`, where `seasons` maps a season number
+     * to the set of its episode numbers and `folders` names the folders it is
+     * kept in, each inside one of Plex's library folders. Null when Plex has no
+     * such show, or has two different ones and nothing says which is meant.
      */
     async show(title, year = null) {
       let shows = await titled('show', title);
@@ -180,10 +181,15 @@ export function createPlex(config, { fetch: send = fetch } = {}) {
       const years = shows.map((show) => show.year).filter((value) => value != null);
       if (!shows.length || Math.max(...years, 0) - Math.min(...years, Infinity) > 1) return null;
 
+      const roots = (await libraries()).filter((library) => library.type === 'show').flatMap((library) => library.folders);
       const seasons = new Map();
+      const folders = new Set();
       for (const show of shows) {
         const container = await read(`/library/metadata/${encodeURIComponent(show.id)}/allLeaves`);
         for (const item of container.Metadata ?? []) {
+          // A show's folder is the first below the library's, whatever lies between it and the file.
+          const below = roots.map((root) => pathBelow(root, item.Media?.[0]?.Part?.[0]?.file ?? '')).find((parts) => parts?.length > 1);
+          if (below) folders.add(cleanTitle(below[0]));
           const season = Number(item.parentIndex);
           const episode = Number(item.index);
           // Season 0 is where Plex keeps specials.
@@ -192,7 +198,7 @@ export function createPlex(config, { fetch: send = fetch } = {}) {
           seasons.get(season).add(episode);
         }
       }
-      return { title: shows[0].title, year: shows[0].year, seasons };
+      return { title: shows[0].title, year: shows[0].year, seasons, folders: [...folders] };
     },
 
     /** Confirms the address and token work, and says which server answered. */

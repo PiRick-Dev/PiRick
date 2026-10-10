@@ -57,7 +57,14 @@ export function plexStandIn(libraries, { token = PLEX_TOKEN, name = 'Home' } = {
     const show = leaves && items.get(decodeURIComponent(leaves[1]));
     if (show?.seasons) {
       const Metadata = Object.entries(show.seasons).flatMap(([season, episodes]) =>
-        (Array.isArray(episodes) ? episodes : Array.from({ length: episodes }, (unused, i) => i + 1)).map((index) => ({ type: 'episode', parentIndex: Number(season), index, title: `Episode ${index}` })),
+        (Array.isArray(episodes) ? episodes : Array.from({ length: episodes }, (unused, i) => i + 1)).map((index) => ({
+          type: 'episode',
+          parentIndex: Number(season),
+          index,
+          title: `Episode ${index}`,
+          // Where the file is, as Plex sees it: in the show's folder, which is named after it unless `folder` says otherwise.
+          Media: [{ Part: [{ file: `${show.library.folders[0]}/${show.folder ?? show.title}/Season ${String(season).padStart(2, '0')}/S${String(season).padStart(2, '0')}E${String(index).padStart(2, '0')}.mkv` }] }],
+        })),
       );
       return json({ MediaContainer: { size: Metadata.length, Metadata } });
     }

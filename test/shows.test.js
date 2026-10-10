@@ -352,7 +352,8 @@ test('without the catalogue, or when it cannot be reached, a request for a show 
 
 const TV = [5000, 5040];
 /** A PiRick whose catalogue knows `shows` and whose indexer has `copies` ([name, seeders, GB]), `most` of them to a search. */
-const world = (shows, copies, most = 50) => talkTo({ catalogue: { shows } }, { corpus: corpusOf(copies.map(([name, seeders = 100, size = 5]) => listing(name, seeders, size, TV)), { most }) });
+const world = (shows, copies, most = 50, more = {}) =>
+  talkTo({ catalogue: { shows }, ...more }, { corpus: corpusOf(copies.map(([name, seeders = 100, size = 5]) => listing(name, seeders, size, TV)), { most }) });
 const seasons = (count, episodes = 10) => Object.fromEntries(Array.from({ length: count }, (unused, i) => [i + 1, episodes]));
 
 test('the lesser known of two shows with one name is not given the copies of the other', async () => {
@@ -382,6 +383,48 @@ test('the lesser known of two shows with one name is not given the copies of the
     assert.deepEqual(chat.world.trace().searches.slice(before), ['Harbour Watch']);
   } finally {
     chat.close();
+  }
+});
+
+test('two shows with one name are not saved into one folder, and a show goes where Plex keeps it', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Watch', year: 2005, weight: 90, country: 'US', seasons: seasons(2, 6) },
+    { id: 2, name: 'Harbour Watch', year: 2001, weight: 70, country: 'GB', seasons: seasons(2, 6) },
+  ];
+  const copies = [
+    ['Harbour.Watch.US.S01.1080p.BluRay.x265-GRP', 900, 20],
+    ['Harbour.Watch.US.S02.1080p.BluRay.x265-GRP', 900, 20],
+    ['Harbour.Watch.UK.S01.720p.BluRay.x264-GRP', 210, 5],
+  ];
+  const saved = (chat) => chat.world.trace().added.map((entry) => entry.savePath);
+  const american = [show({ title: 'Harbour Watch 2005', season: 2 }), get('TV', 'Harbour Watch')];
+  const british = [show({ title: 'Harbour Watch UK', season: 1 }), get('TV', 'Harbour Watch')];
+
+  // With nothing on disk, each gets a folder with its year in the name, as Plex writes them.
+  const empty = world(shows, copies);
+  // A folder that says which of the two it is, is that one's. One with only the name they share could be either's.
+  const kept = world(shows, copies, 50, { folders: { '/media/TV': ['Harbour Watch', 'Harbour Watch (US)'] } });
+  // Plex files the American one with its country, in a folder called something else again.
+  const inPlex = world(shows, copies, 50, { plex: { shows: [{ title: 'Harbour Watch (US)', year: 2005, seasons: { 1: 6 }, folder: 'HW American' }] }, folders: { '/media/TV': ['HW American', 'Harbour Watch'] } });
+  try {
+    const first = await empty.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    await empty.say('And season 1 of the British one', british, 'Done.');
+    assert.deepEqual(saved(empty), ['/media/TV/Harbour Watch (2005)', '/media/TV/Harbour Watch (2001)']);
+    assert.match(first.record.statuses.at(-1), /→ TV \/ Harbour Watch \(2005\) \(new folder\)$/);
+
+    await kept.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    await kept.say('And season 1 of the British one', british, 'Done.');
+    assert.deepEqual(saved(kept), ['/media/TV/Harbour Watch (US)', '/media/TV/Harbour Watch (2001)']);
+
+    const known = await inPlex.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    assert.equal(known.outputs[0].plex, 'Plex has none of season 2.', 'so Plex knows the show, under the name it files it by');
+    assert.deepEqual(saved(inPlex), ['/media/TV/HW American']);
+    const have = await inPlex.say('And season 1 of it', [show({ title: 'Harbour Watch 2005', season: 1 })], 'You already have it.');
+    assert.equal(have.outputs[0].plex, 'Plex already has all 6 episodes of season 1 of Harbour Watch (US).');
+  } finally {
+    empty.close();
+    kept.close();
+    inPlex.close();
   }
 });
 

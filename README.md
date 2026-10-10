@@ -255,6 +255,8 @@ There is no account and no key. Films and people are looked up in [Wikidata](htt
 - Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer.
 - Of a show with one season, a pack of that season is all of it, whether or not it calls itself complete.
 - A show's folder is named by the catalogue, so it is the same every time, and a folder it already has under another of its names is reused. PiRick no longer asks whether "The Vampires" belongs in "Les Vampires".
+- A show that shares its name with another gets its year in its folder's name, such as `Kestrelmere (2005)`, which is how Plex writes them, so two shows are never saved into one folder. A folder that is already there is taken for this show's only if it says so: by the year, by the country, as in `Kestrelmere (US)`, or because Plex keeps the show in it.
+- With Plex connected, a show goes into the folder Plex already keeps it in, whatever that folder is called.
 - With Plex connected, PiRick knows whether Plex has all of a season. A complete season is reported as there. Of a partial one, only the missing episodes are fetched.
 
 **Questions.** With the catalogue on, the assistant also answers questions, without searching the indexers and without downloading anything:

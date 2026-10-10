@@ -592,12 +592,26 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (!title) {
       return { reply: { ok: false, error: `${library.name} keeps each show in its own folder. Call download again with title set to the name of the show.` } };
     }
-    let folder = title;
+    // One of several shows with a name gets its year in its folder's name, as Plex writes it, so that
+    // two shows are never saved into one folder.
+    const dated = known?.shared && known.year ? cleanFolderName(`${known.title} (${known.year})`) : '';
+    let folder = dated || title;
     // Only claim the folder is new when qBittorrent confirmed it is not there.
     let created = Boolean(folders);
     if (folders) {
       let found = findFolder(title, folders);
-      if (known && !found.match) {
+      const called = (wanted) => folders.find((other) => other.toLowerCase() === String(wanted).toLowerCase());
+      // Where Plex keeps the show is where the rest of it belongs, whatever that folder is called.
+      const inPlex = (known?.inPlex ?? []).map(called).find(Boolean);
+      if (inPlex) found = { match: inPlex };
+      else if (dated) {
+        // A folder is this show's when it says so, by the year, the country or another name of the show.
+        // One with only the name the two share could as well be the other's.
+        const key = titleKey(title);
+        const marked = folders.find((other) => titleKey(other) === key && other.includes(String(known.year)));
+        const under = [...(known.tagged ?? []), ...known.names.filter((other) => titleKey(other) !== key)].map((other) => findFolder(other, folders).match).find(Boolean);
+        found = { match: marked ?? under };
+      } else if (known && !found.match) {
         // The catalogue knows the show's other names, so a folder under one of them is this show's.
         const under = known.names.map((other) => findFolder(other, folders).match).find(Boolean);
         // Folders that share its name are told apart by the year in theirs.
@@ -920,10 +934,12 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
 
       // What Plex has of this show: undefined when it was not asked, null when it has none.
       const wanted = parseWanted(title);
+      // The show's name with its country after it, which is how release names, folders and Plex tell namesakes apart.
+      const tagged = listed ? listed.countries.flatMap((code) => COUNTRY_TAGS[code] ?? [code]).map((tag) => `${listed.title} ${tag}`) : [];
       const inPlex = await askPlex(async () => {
         if (!listed) return plex.show(wanted.name, wanted.year);
-        // Plex may have it filed under another of its names.
-        for (const name of listed.names.slice(0, MAX_PLEX_LOOKUPS)) {
+        // Plex may have it filed under another of its names, or with its country: "Kestrelmere (US)".
+        for (const name of [...new Set([listed.title, ...tagged, ...listed.names])].slice(0, MAX_PLEX_LOOKUPS)) {
           const under = await plex.show(name, listed.year);
           if (under) return under;
         }
@@ -1001,8 +1017,6 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       const settled = new Set([...held.keys()].filter((number) => (guide ? lacking(number)?.length === 0 : number < lastHeld)));
       const leaveOut = (allOfIt && held.size > 0) || theRest;
 
-      // The show's name with its country after it, which is how releases tell namesakes apart.
-      const tagged = listed ? listed.countries.flatMap((code) => COUNTRY_TAGS[code] ?? [code]).map((tag) => `${listed.title} ${tag}`) : [];
       const options = {
         title,
         season,
@@ -1081,7 +1095,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           title: `${show}: ${summary}`,
           parts: plan.parts,
           ...(askFirst && { inPlex: askFirst }),
-          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names } }),
+          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names, tagged, shared: known.shared, inPlex: inPlex?.folders ?? [] } }),
         });
         log.info('show plan', { user: user.username, title, season, episode, torrents: plan.torrents, summary });
         turn.status(`Found ${what}: ${summary} (${total})`, 'search');
