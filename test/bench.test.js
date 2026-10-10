@@ -19,6 +19,25 @@ async function run(scenario, script) {
 }
 const failed = (result) => result.checks.filter((entry) => !entry.pass).map((entry) => entry.name);
 
+test('a world can be given an indexer and a Plex of one’s own', async () => {
+  const { createPlex } = await import('../src/plex.js');
+  const { PLEX_TOKEN, PLEX_URL, plexStandIn } = await import('../bench/plex.js');
+  const server = plexStandIn([{ key: '1', title: 'Films', type: 'movie', folders: ['/data/Movies'], items: [{ title: 'Saltmarsh Row', year: 2020 }] }]);
+  const using = {
+    corpus: corpus.corpusOf([corpus.release('Saltmarsh.Row.2020.1080p.BluRay.x264-GRP', 40, 5)]),
+    plex: createPlex({ url: PLEX_URL, token: PLEX_TOKEN, timeoutMs: 5000 }, { fetch: server.fetch }),
+  };
+  const chat = talkTo({}, using);
+  try {
+    const call = { role: 'assistant', content: '', tool_calls: [{ function: { name: 'search_media', arguments: { query: 'Saltmarsh Row 2020', media_type: 'movie' } } }] };
+    const { outputs } = await chat.say('Do we have Saltmarsh Row?', [call], 'You already have it.');
+    assert.deepEqual(outputs[0].results.map((result) => result.title), ['Saltmarsh.Row.2020.1080p.BluRay.x264-GRP'], 'what the indexer handed over, and nothing of the usual');
+    assert.equal(outputs[0].plex, 'Plex already has Saltmarsh Row (2020). Which copy or quality it has is not known.');
+  } finally {
+    chat.close();
+  }
+});
+
 test('the stand-in indexer matches by words, as real ones do', () => {
   const names = (query, categories) => search(query, categories).map((entry) => entry.title);
   assert.ok(names('Caminandes').length >= 7);
