@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { endedWithoutActing } from '../src/agent.js';
 import { hashFromMagnet, normaliseHash } from '../src/jackett.js';
 import { formatBytes, toDownload } from '../src/qbittorrent.js';
-import { differentReleasesNote, normaliseQuery } from '../src/tools.js';
+import { differentReleasesNote, filmMeant, normaliseQuery } from '../src/tools.js';
 
 test('season and episode wording is rewritten the way indexers name things', () => {
   assert.equal(normaliseQuery('Copperhollow season 2'), 'Copperhollow S02');
@@ -73,6 +73,22 @@ test('replies that claim a download which never happened are caught', () => {
     assert.equal(endedWithoutActing(waiting, promise), true, promise);
     assert.equal(endedWithoutActing(waiting, promise, 1), false, promise);
   }
+});
+
+test('a copy is remembered as the film the catalogue named, unless its own name says otherwise', () => {
+  const known = { title: 'Brindle', year: 1984, imdb: 'tt0001984' };
+  const meant = { kind: 'film', title: 'Brindle', year: 1984, imdb: 'tt0001984' };
+  assert.deepEqual(filmMeant(known, 'Brindle.1984.1080p.BluRay.x264-GRP'), meant);
+  // A name with no year in it is the very thing Plex has to guess at.
+  assert.deepEqual(filmMeant(known, 'Brindle.1080p.BluRay.x264-GRP'), meant);
+  assert.deepEqual(filmMeant(known, 'Brindle.1985.1080p.BluRay.x264-GRP'), meant, 'sources differ by a year');
+  // The remake, or an episode of a show of the name: not the film that was named.
+  assert.equal(filmMeant(known, 'Brindle.2021.1080p.WEB-DL.x264-GRP'), null);
+  assert.equal(filmMeant(known, 'Brindle.S01E02.1080p.WEB.H264-GRP'), null);
+  assert.equal(filmMeant(known, 'Brindle.S01.1080p.WEB.H264-GRP'), null);
+  // Nothing named a film, or the catalogue has no number for it: there is nothing to hold Plex to.
+  assert.equal(filmMeant(undefined, 'Brindle.1984.1080p.BluRay.x264-GRP'), null);
+  assert.equal(filmMeant({ title: 'Brindle', year: 1984, imdb: null }, 'Brindle.1984.1080p.BluRay.x264-GRP'), null);
 });
 
 test('info hashes are read from hex and base32 magnets', () => {

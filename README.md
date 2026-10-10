@@ -158,9 +158,11 @@ Things to know:
 
 ## Upkeep: finished and stuck downloads
 
-PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does two things.
+PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does three things.
 
 **Finished downloads.** Every minute PiRick looks for downloads that have just finished. For each one it leaves a note for the person who asked, which they get the next time they open PiRick: `“Wrenfield Cross (S03E01)” has finished downloading.` Episodes of one show that finish before the note is read are gathered into one note. With Plex connected, PiRick also asks Plex to pick the download up straight away, and the note says so. This part is always on.
+
+**What Plex takes them for.** A minute or two after asking Plex to pick a download up, PiRick looks at which film or show Plex took it for. If Plex took it for another one of the same name, or could not place it at all, PiRick tells Plex which it is and leaves a note saying so. This needs Plex and the catalogue both connected, and is on unless you untick **Correct what Plex matches wrongly** under **Admin > Upkeep**. "Connecting Plex" says exactly what it does and what it leaves alone.
 
 **Stuck downloads.** Every 10 minutes PiRick also checks for downloads that have stopped, including ones added before this feature existed. A download is **stuck** when it should be making progress and has not grown for the time set under **Admin > Upkeep** (6 hours by default). Time spent paused, queued or being checked does not count.
 
@@ -189,10 +191,11 @@ Things to know:
 
 ## Connecting Plex
 
-PiRick works without talking to Plex. Connecting it is optional and fixes two things:
+PiRick works without talking to Plex. Connecting it is optional and fixes three things:
 
 - **"It's finished" becomes true sooner.** Plex notices new files on its own schedule, which can be hours. With Plex connected, PiRick asks it to look at a download's folder the moment the download finishes.
 - **Nothing is fetched twice.** Without Plex, PiRick only knows what is in qBittorrent. With it, PiRick checks what is already in your Plex libraries, however it got there, before fetching anything.
+- **A wrong match is put right.** Plex works out what a new download is from the names of its folder and files, and now and then takes it for another film or show of the same name. With the catalogue on as well, PiRick knows which one it fetched, and tells Plex.
 
 **Setting it up.** Add two lines to `.env` and run `docker compose up -d`:
 
@@ -203,11 +206,30 @@ PLEX_TOKEN=your-token
 
 `PLEX_URL` is the address of the Plex server as seen from the PiRick container, with nothing after the port (see "Reaching your other services"). `PLEX_TOKEN` is your Plex access token: in Plex's web app, open any film or episode, choose **Get Info** from its `⋯` menu, then **View XML**, and copy what follows `X-Plex-Token=` in the address of the page that opens. Plex describes this under [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/). **Admin > Connections** then shows the server's name and how many libraries it has.
 
-**Treat the token like a password.** It gives full control of your Plex server. PiRick only reads what is in the libraries and asks for scans; it never changes or removes anything in Plex. The token is sent in a request header, never in an address, and is never logged, shown in the Admin screen or given to the AI model.
+**Treat the token like a password.** It gives full control of your Plex server. PiRick reads what is in the libraries, asks for scans, and changes one thing: which film or show Plex takes a download for, when PiRick has just added it and Plex got it wrong (see "When Plex gets a download wrong" below, which also says how to switch that off). It never removes, renames or moves anything in Plex, and never changes what was there before. The token is sent in a request header, never in an address, and is never logged, shown in the Admin screen or given to the AI model.
 
 **Matching libraries.** qBittorrent and Plex usually see one folder under two paths, for example `/media/TV` and `/data/TV`. PiRick takes each of its libraries to be the Plex folder whose path ends the same way. **Admin > Libraries** shows the match under each library, with a list to pick another Plex folder or **Not in Plex**. A library with no match works as before; Plex is just not told about its downloads.
 
 **When a download finishes**, PiRick asks Plex to scan that one folder: the show's own folder, or the film's. It is one request however many episodes finished together. If Plex cannot be reached, PiRick tries again on its next few looks, then gives up and says only that the download finished. In the Downloads panel a download reads "Finished, ready in Plex" once Plex has been asked, and "Finished" otherwise.
+
+**When Plex gets a download wrong.** Plex works out what a new film or show is from the names of its folder and files. A season named `Kestrelmere.S01.1080p` in a folder called `Kestrelmere` does not say which of two shows of that name it is, and Plex takes the better known. A film with no year in its name can be taken for its remake, or for nothing at all.
+
+PiRick knows what it fetched, because the catalogue named it. So with the catalogue on (see "A catalogue of what exists") it checks, in these steps:
+
+1. When a download finishes, PiRick asks Plex to scan its folder, as above. On its next looks, a minute apart, it asks Plex which film or show now holds the download's files.
+2. It compares the number IMDb gives that film or show with the number of the one it fetched. When they are the same there is nothing to do, and that is how it nearly always ends.
+3. When they differ, or Plex matched the download to nothing, PiRick asks Plex's own search for the right number and sets what comes back as the match. This is what **Fix Match** does in Plex. The files stay as they are, and Plex fetches the new title and artwork from its own service as it does for any match.
+4. On the next look PiRick sees that Plex has taken the change, and leaves a note for whoever asked: `Plex had filed “Kestrelmere” (2001) as “Kestrelmere (US)” (2005). That has been corrected.`
+
+It is careful about what it changes:
+
+- **Only what it added itself.** If the film or show in Plex also holds files that PiRick did not just fetch, nothing is changed.
+- **Once.** Each download is checked one time. If you change a match by hand afterwards, PiRick does not change it back.
+- **By number, never by name.** If Plex's search has nothing under the IMDb number, the match is left as it is.
+
+One case is reported and not corrected. When Plex already has another show of the same name, it can add the new folder to that show instead of listing a new one. A film can likewise be added to its namesake as a second copy. Putting that right means splitting the two apart first, which gives what you already had a new entry in Plex, so PiRick leaves it to you and says what to do: `Plex has put “Kestrelmere” (1963) together with “Kestrelmere (2005)”, which it already had. Only what PiRick added itself is corrected, so this one is left for an admin: in Plex, use Split Apart on it, then Fix Match on the new one.` This should be rare, since PiRick puts the year in the folder name of a show that shares its name, and Plex goes by that.
+
+The check is on from the start. To switch it off, untick **Correct what Plex matches wrongly** under **Admin > Upkeep**, where everything it did is also listed.
 
 **What you already have.** The assistant is told what Plex has along with what it finds:
 
@@ -220,6 +242,10 @@ Things to know:
 - Plex knows which episodes it has, not how many a season should have. PiRick reports the number and leaves the judgement to you. For a whole show it takes every season before the last one you have to be complete, and looks for single episodes missing from that last one. With the catalogue on, PiRick knows how many there should be, and none of this guessing is needed.
 - Films and shows are matched by title and year. Capitals, punctuation and numbers written as words do not matter, but something filed in Plex under a quite different name is not recognised and may be fetched again.
 - Music and books are not checked against Plex.
+- A match is only checked for a film or show the catalogue named when it was fetched. With the catalogue off, or for a title it does not know, PiRick has nothing to compare with and leaves Plex's match alone.
+- Matches are corrected in libraries that use Plex's current agents, "Plex Movie" and "Plex TV Series". A library still on one of the older agents is left alone. It was tried against Plex Media Server 1.43.
+- The check is about which film or show, not which episode. An episode filed under the wrong number of the right show is not noticed.
+- If Plex has not shown a download half an hour after being asked to scan, PiRick stops looking for it.
 - PiRick asks Plex with the server's own token, so what it says someone already has is drawn from every film and show library on the server. That includes a library you have not shared with that person in Plex: anyone with a PiRick account can find out whether a title is in it.
 - If Plex is down when someone asks for something, PiRick carries on as it does without Plex.
 - Use an `http://` address on your own network. If Plex is set to require secure connections (Settings > Network), that is refused: set it to "Preferred".
@@ -262,6 +288,8 @@ A name that ends in what reads as a year is taken as it stands when a film or a 
 - A show that shares its name with another gets its year in its folder's name, such as `Kestrelmere (2005)`, which is how Plex writes them, so two shows are never saved into one folder. A folder that is already there is taken for this show's only if it says so: by the year, by the country, as in `Kestrelmere (US)`, or because Plex keeps the show in it.
 - With Plex connected, a show goes into the folder Plex already keeps it in, whatever that folder is called.
 - With Plex connected, PiRick knows whether Plex has all of a season. A complete season is reported as there. Of a partial one, only the missing episodes are fetched.
+
+**In Plex.** With Plex connected as well, what the catalogue named is what Plex is held to. If Plex takes a finished download for another film or show of the same name, PiRick tells it which one it is: see "When Plex gets a download wrong" under "Connecting Plex".
 
 **Questions.** With the catalogue on, the assistant also answers questions, without searching the indexers and without downloading anything:
 
@@ -380,7 +408,7 @@ Six things held across models:
 
 A model's size says little by itself: a 24B Mistral scored 74% without the catalogue, at 23 seconds a request.
 
-Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. A reply that says a download is about to start, when it is waiting for the person's yes, is sent back as well. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
+Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. A reply that says a download is about to start, when it is waiting for the person's yes, is sent back as well. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, whether a stuck download gets replaced, and whether Plex is told that it took a download for the wrong thing, are also decided by PiRick's own rules, not by the model.
 
 If a model behaves badly, set `LOG_LEVEL=debug` to see each step it takes in `docker compose logs pirick`, or try a larger model.
 
@@ -452,6 +480,7 @@ What is in place:
 - The model never sees or supplies links, magnet addresses, folder paths, the Jackett key or the Plex token. It can only pick from results Jackett returned to that same person, by id, and only save into a library an admin defined. Show names it supplies are cleaned so they cannot point outside the library's folder.
 - What the catalogue returns was typed in by the public. Names are tidied and cut to length, and what a person types goes to its search as plain words. Descriptions are shortened, dropped when they plainly read as instructions, and only ever given to the model in answers that contain nothing it could download. Since no filter catches every instruction, nothing is downloaded in a message where something was looked up: the model has to ask, and the person's next message starts it.
 - The Plex token travels only in a request header to the address in `PLEX_URL`. It is never put in an address, a log line or an API reply. PiRick does not follow a redirect from Plex, which would carry the token elsewhere.
+- PiRick makes one kind of change in Plex: which film or show a download it has just added is taken for. That is decided by fixed rules from the catalogue's answer, never by the model, and nothing a person typed or a search returned can point it at anything else in Plex.
 - A download link from Jackett is followed only to a magnet or within the site it started on, never on to another address. A torrent file over 10 MB, or a magnet that is more than one line, is refused.
 - The container runs as a non-root user with a read-only filesystem, no Linux capabilities and no privilege escalation. Only `/data` is writable.
 
@@ -498,6 +527,7 @@ The database (accounts and what each person has chosen, sessions, chat history, 
 | Plex: "Cannot reach Plex" with an address that is right | Plex is set to require secure connections, or `PLEX_URL` uses `https://` with an address the certificate is not for. Use `http://` and set Plex's secure connections to "Preferred". |
 | A download reads "Finished", not "ready in Plex" | Its library has no matching Plex folder (check **Admin > Libraries**), Plex could not be reached at the time, or it finished before Plex was connected. |
 | PiRick fetched something that is already in Plex | It is filed in Plex under a different title or year, or in a library of another kind. See "Connecting Plex". |
+| Plex shows a download as another film or show | With Plex and the catalogue both connected, PiRick corrects this itself a few minutes after the download finishes, and **Admin > Upkeep** lists it. If it did not: the catalogue is off or does not know the title, **Correct what Plex matches wrongly** is unticked, the library uses one of Plex's older agents, or Plex added the download to something it already had, which PiRick reports and leaves to you. Use **Fix Match** in Plex. |
 | "Not downloaded: the … library's folder does not exist" | The folder in Admin > Libraries is wrong, often only in its capitals. Open that screen and use the suggested fix. |
 | A download went into the wrong library | Make the "What goes here" descriptions more specific, especially where two libraries overlap. |
 | qBittorrent: "refusing PiRick before it looks at the password" | qBittorrent rejects requests whose port differs from its own, which happens when its port is remapped in Docker (for example `9090:8080`). Use the same port on both sides, or turn off "Enable Host header validation" in its Web UI options. |
@@ -537,7 +567,7 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/tools.js` | The tools the model can call: search, find a show, download (a result or a whole plan, into a library), list downloads |
 | `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
-| `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, and replacing the ones that are stuck |
+| `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, seeing that Plex took them for the right thing, and replacing the ones that are stuck |
 | `src/news.js` | What is new in PiRick, and who has still to be told. A change people would notice gets an entry here, written for them |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
 | `src/settings.js`, `src/folders.js` | Libraries, personalities and each person's choices; folder naming, matching and checks |

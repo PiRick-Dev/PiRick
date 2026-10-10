@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
@@ -61,7 +65,7 @@ function setup({ torrents = [], catalog = {}, settings: initial } = {}) {
     return upkeep.runOnce();
   };
   const actions = () => upkeep.recent().reverse().map((entry) => entry.action);
-  return { upkeep, settings, state, calls, clock, run, actions };
+  return { db, upkeep, settings, state, calls, clock, run, actions };
 }
 
 test('torrents are described by what they are', () => {
@@ -230,6 +234,45 @@ test('things PiRick cannot identify, and broken torrents, are flagged but left a
   assert.deepEqual(calls.removed, []);
   assert.deepEqual(actions().sort(), ['problem', 'stuck']);
   assert.deepEqual([...upkeep.stuckHashes()], [album.hash], 'a broken torrent is a different problem, not "stuck"');
+});
+
+test('a replacement is remembered as what the stuck download was fetched as', async () => {
+  const dead = torrent('Show.S01E03.1080p.WEB-GRP');
+  const { db, upkeep, state, run } = setup({ torrents: [dead], catalog: { 'Show S01E03': [['Show.S01E03.1080p.BluRay', 8]] } });
+  const meant = { kind: 'show', title: 'Show', year: 2019, imdb: 'tt0002019' };
+  // A look comes upon the download before the chat has said what it is.
+  await run();
+  upkeep.track({ hash: dead.hash, name: dead.name, username: 'alice', meant });
+  // Said again without it, as when someone else asks for the same thing, nothing is lost.
+  upkeep.track({ hash: dead.hash, name: dead.name, username: 'bob' });
+  const kept = () => db.prepare('SELECT hash, meant FROM tracked_downloads').all().map((row) => [row.hash, JSON.parse(row.meant || 'null')]);
+  assert.deepEqual(kept(), [[dead.hash, meant]]);
+
+  assert.equal((await run(7)).replaced, 1);
+  assert.deepEqual(kept(), [[state.torrents[0].hash, meant]]);
+});
+
+test('a database from before PiRick remembered such things gains what it needs, and keeps what it had', () => {
+  const folder = mkdtempSync(path.join(tmpdir(), 'pirick-'));
+  const file = path.join(folder, 'pirick.db');
+  try {
+    // The table as it was made before.
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE tracked_downloads (
+      hash TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', completed INTEGER NOT NULL DEFAULT 0, progress_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'watching', attempts INTEGER NOT NULL DEFAULT 0, tried TEXT NOT NULL DEFAULT '[]', searched_at INTEGER NOT NULL DEFAULT 0)`);
+    old.prepare("INSERT INTO tracked_downloads (hash, name, username, progress_at, status) VALUES (?, 'Show.S01E01.1080p', 'alice', 1, 'in-plex')").run('a'.repeat(40));
+    old.close();
+
+    for (let opened = 0; opened < 2; opened++) {
+      const db = openDb(file);
+      const [row] = db.prepare('SELECT * FROM tracked_downloads').all();
+      assert.deepEqual({ ...row }, { hash: 'a'.repeat(40), name: 'Show.S01E01.1080p', username: 'alice', completed: 0, progress_at: 1, status: 'in-plex', attempts: 0, tried: '[]', searched_at: 0, meant: '', filed: '', filed_as: '' });
+      db.close();
+    }
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });
 
 test('one check replaces at most five items, and upkeep can be switched off', async () => {

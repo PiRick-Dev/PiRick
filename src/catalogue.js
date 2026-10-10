@@ -443,6 +443,8 @@ function filmFrom(entity, names) {
     anime: kinds.some((id) => ANIME_KINDS.has(id)) || (animated && (idsOf(entity, P.country).includes(JAPAN) || idsOf(entity, P.language).includes(JAPANESE))),
     genres: named(idsOf(entity, P.genre), 3),
     page: entity.sitelinks?.enwiki?.title ?? null,
+    // The number IMDb gives it, which Plex knows it by as well.
+    imdb: textsOf(entity, P.imdb).find((id) => /^tt\d+$/.test(id)) ?? null,
     firm: true,
   };
 }

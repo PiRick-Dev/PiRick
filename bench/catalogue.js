@@ -100,6 +100,7 @@ export function catalogueStandIn({ films = [], shows = [], people = [], mostRead
   const filmId = (film) => `Q${1000 + films.indexOf(film)}`;
   const showId = (show) => `Q${2000 + shows.indexOf(show)}`;
   const imdbOf = (show) => `tt${String(9000000 + shows.indexOf(show))}`;
+  const filmImdbOf = (film) => `tt${String(8000000 + films.indexOf(film))}`;
   const pageOf = (film) => film.page ?? ((film.known ?? 0) >= 2 ? film.title : null);
 
   for (const film of films) {
@@ -124,6 +125,7 @@ export function catalogueStandIn({ films = [], shows = [], people = [], mostRead
         P495: film.country ? [pointTo(COUNTRIES[film.country] ?? 'Q30')] : [],
         P364: film.language ? [pointTo(LANGUAGES[film.language] ?? 'Q1860')] : [],
         P1476: film.original ? [{ mainsnak: { snaktype: 'value', datavalue: { value: { text: film.original, language: 'und' }, type: 'monolingualtext' } }, rank: 'normal' }] : [],
+        P345: [{ mainsnak: { snaktype: 'value', datavalue: { value: filmImdbOf(film), type: 'string' } }, rank: 'normal' }],
       }),
     });
   }

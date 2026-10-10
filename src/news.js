@@ -33,6 +33,17 @@ export const NEWS = [
     when: (has) => has.catalogue,
     text: 'PiRick can answer questions about films, shows and the people in them. Ask what something is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.',
   },
+  {
+    id: 3,
+    when: (has) => has.matches,
+    text: 'PiRick now sees that Plex takes what it fetches for the right film or show. When Plex takes something for another of the same name, or does not recognise it, PiRick tells Plex which it is and leaves you a note.',
+  },
+  {
+    id: 4,
+    when: (has) => has.matches,
+    admin: true,
+    text: 'PiRick now corrects a wrong match in Plex by itself, for films and shows it has just added and for nothing that was in Plex before. To switch that off, open Admin, then Upkeep.',
+  },
 ];
 
 /**
@@ -40,7 +51,8 @@ export const NEWS = [
  * who has an account when this PiRick first starts with it. Whoever joins
  * later finds PiRick as it is, and is told nothing.
  *
- * `has()` says what this PiRick has at the moment: `{ catalogue, personalities }`.
+ * `has()` says what this PiRick has at the moment: `{ catalogue, personalities,
+ * matches }`, the last being whether it corrects what Plex matches wrongly.
  */
 export function createNews({ db, has, entries = NEWS }) {
   const q = {

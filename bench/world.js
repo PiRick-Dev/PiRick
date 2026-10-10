@@ -57,7 +57,8 @@ const MARKUP = /^\s*#{1,6}\s|^\s*\|.*\|\s*$|\]\(https?:/m;
  *   news         what is new in PiRick since the user was last told, as sentences
  *                like those in its own list (src/news.js)
  *   plex       connects a Plex server that already has { films: [{ title, year }],
- *                shows: [{ title, year, seasons: { 1: 10 } }] }. Without it PiRick
+ *                shows: [{ title, year, seasons: { 1: 10 } }] }, and whose own search
+ *                `knows` what is listed for it (see plex.js). Without it PiRick
  *                runs with no Plex, as it does when none is set up
  *   folders      folders on disk besides the usual ones: { '/media/TV': ['Name'] }
  *   catalogue    switches on the catalogue of what exists, which knows the films and
@@ -108,11 +109,14 @@ export function createWorld(setup = {}, connect, using = {}) {
   const folders = Object.fromEntries(Object.entries(FOLDERS).map(([path, names]) => [path, [...names, ...(setup.folders?.[path] ?? [])]]));
   // Plex sees the same folders under another path, as it does from inside its own container.
   const plexServer = setup.plex
-    ? plexStandIn([
-        { key: '1', title: 'Films', type: 'movie', folders: ['/data/Movies'], items: setup.plex.films ?? [] },
-        { key: '2', title: 'TV Shows', type: 'show', folders: ['/data/TV'], items: setup.plex.shows ?? [] },
-        { key: '3', title: 'Anime', type: 'show', folders: ['/data/Anime'], items: [] },
-      ])
+    ? plexStandIn(
+        [
+          { key: '1', title: 'Films', type: 'movie', folders: ['/data/Movies'], items: setup.plex.films ?? [] },
+          { key: '2', title: 'TV Shows', type: 'show', folders: ['/data/TV'], items: setup.plex.shows ?? [] },
+          { key: '3', title: 'Anime', type: 'show', folders: ['/data/Anime'], items: [] },
+        ],
+        { knows: setup.plex.knows ?? [] },
+      )
     : null;
   const plex = using.plex ?? createPlex(plexServer ? { url: PLEX_URL, token: PLEX_TOKEN, timeoutMs: 5000 } : { url: '', token: '' }, { fetch: plexServer?.fetch });
   const catalogueServices = setup.catalogue ? catalogueStandIn(setup.catalogue === true ? WORLD : setup.catalogue) : null;
@@ -129,7 +133,7 @@ export function createWorld(setup = {}, connect, using = {}) {
       if (setup.failAdds) throw new UpstreamError('qbittorrent', 'qBittorrent returned HTTP 500 for /api/v2/torrents/add');
       const hash = hashFromMagnet(magnet);
       const entry = byHash(hash);
-      torrents.push({ hash, name: entry.title, progress: 0, state: 'metaDL', eta: 0, size: entry.size, tags: given.join(', '), save_path: savePath, added_on: Math.floor(Date.now() / 1000) });
+      torrents.push({ hash, name: entry.title, progress: 0, state: 'metaDL', eta: 0, size: entry.size, tags: given.join(', '), save_path: savePath, content_path: `${savePath}/${entry.title}`, added_on: Math.floor(Date.now() / 1000) });
       added.push({ title: entry.title, size: entry.size, savePath, category, turn: turns.length - 1 });
     },
     async addTags() {},
@@ -259,6 +263,12 @@ export function createWorld(setup = {}, connect, using = {}) {
 
     /** The stand-in Plex server, when the scenario has one. */
     plexServer,
+    /** What looks after this world's downloads once they have been started. Nothing runs it but a call. */
+    upkeep,
+    /** Every download in qBittorrent finishes. */
+    finish() {
+      for (const torrent of torrents) Object.assign(torrent, { progress: 1, state: 'uploading' });
+    },
     /** The stand-in for the catalogue's services, when the scenario has one. */
     catalogueServices,
 

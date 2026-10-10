@@ -293,6 +293,21 @@ function createResultCache() {
   };
 }
 
+/**
+ * The film a copy was fetched as: the one the catalogue named for the search
+ * that found it (`known`: its title, year and the number IMDb gives it),
+ * unless the copy's own name says it is something else, an episode or a film
+ * of another year. Null when nothing named one. Plex is later held to it.
+ */
+export function filmMeant(known, release) {
+  if (!known?.imdb) return null;
+  const copy = parseRelease(release);
+  if (copy.kind !== 'movie' && copy.kind !== 'unknown') return null;
+  // Sources differ by a year about when a film came out, not by two.
+  if (copy.kind === 'movie' && known.year && Math.abs(copy.year - known.year) > 1) return null;
+  return { kind: 'film', title: known.title, year: known.year, imdb: known.imdb };
+}
+
 export function createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue }) {
   const cache = createResultCache();
   const finder = createFinder(jackett, config.jackett);
@@ -721,7 +736,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
    * Hands one release to qBittorrent unless it is already there. Resolves to
    * the existing torrent (as `qbit.find` gives it) or null when it was added.
    */
-  async function addUnlessPresent(user, release, target) {
+  async function addUnlessPresent(user, release, target, meant) {
     let hash = release.infoHash;
     let existing = hash ? await qbit.find(hash) : null;
     if (!existing) {
@@ -734,7 +749,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       if (!existing) {
         await qbit.add({ ...source, ...target });
         // Upkeep now knows to watch for it finishing, however soon that is.
-        upkeep?.track({ hash, name: release.title, username: user.username });
+        upkeep?.track({ hash, name: release.title, username: user.username, meant });
         return null;
       }
     }
@@ -749,6 +764,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     const target = { category: library.category, savePath: spot.savePath, tags: [BASE_TAG, userTag(user.username)] };
     const total = entry.parts.reduce((sum, part) => sum + part.releases.length, 0);
     const counts = { started: 0, already: 0, failed: 0 };
+    // Which show the catalogue said this is, for seeing later that Plex took it for the same one.
+    const meant = entry.known?.imdb ? { kind: 'show', title: entry.known.title, year: entry.known.year, imdb: entry.known.imdb } : null;
     let done = 0;
     // "(new folder)" is worth saying once, on the first line, not on every part.
     let label = spot.label;
@@ -759,7 +776,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         done += 1;
         if (total > 1) turn.emit({ type: 'working', text: `Starting download ${done} of ${total}…` });
         try {
-          outcome[(await addUnlessPresent(user, release, target)) ? 'already' : 'started'] += 1;
+          outcome[(await addUnlessPresent(user, release, target, meant)) ? 'already' : 'started'] += 1;
         } catch (err) {
           outcome.failed += 1;
           log.warn('download failed', { user: user.username, title: release.title, error: describeError(err) });
@@ -864,7 +881,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         const film = filmOf(contents[i]);
         if (film) tellInPlex(user, turn, `film ${film.id}`);
         return {
-          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, year: known.film.year, names: known.film.names } }) }),
+          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, year: known.film.year, names: known.film.names, imdb: known.film.imdb } }) }),
           title: result.title,
           kind: kindOf(result.categories),
           contains: describeContents(contents[i]),
@@ -1140,7 +1157,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           title: `${show}: ${summary}`,
           parts: plan.parts,
           ...(askFirst && { inPlex: askFirst }),
-          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names, tagged, shared: known.shared, inPlex: inPlex?.folders ?? [] } }),
+          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names, tagged, shared: known.shared, inPlex: inPlex?.folders ?? [], imdb: listed.imdb } }),
         });
         log.info('show plan', { user: user.username, title, season, episode, torrents: plan.torrents, summary });
         turn.status(`Found ${what}: ${summary} (${total})`, 'search');
@@ -1286,7 +1303,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         const spot = await place(user, library, result.title, args, turn, id, result.known);
         if (spot.reply) return spot.reply;
         label = spot.label;
-        const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags });
+        const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags }, filmMeant(result.known, result.title));
         if (existing) return alreadyThere(existing);
         log.info('download started', {
           user: user.username,

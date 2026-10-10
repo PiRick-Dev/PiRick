@@ -508,6 +508,8 @@
           <label>Hours without progress before a download counts as stuck
             <input name="stuckHours" type="number" min="1" max="168" step="1" inputmode="numeric" required>
           </label>
+          <label class="check"><input type="checkbox" name="fixMatches"> Correct what Plex matches wrongly</label>
+          <p class="muted small">With Plex and the catalogue connected, PiRick sees that Plex took a finished download for the film or show it was fetched as, and tells Plex which it is when it took it for another. It only touches what it added itself.</p>
           <p id="upkeep-note" class="form-note" role="status" hidden></p>
           <div class="row-actions">
             <button type="submit" class="primary">Save</button>

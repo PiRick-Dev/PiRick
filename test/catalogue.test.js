@@ -405,6 +405,9 @@ test('a film is found by its name, and its facts come with it', async () => {
   );
   assert.equal(one.anime, false);
   assert.equal(one.follows, null);
+  // The number IMDb gives it, which is what Plex goes by too.
+  assert.match(one.imdb, /^tt\d+$/);
+  assert.notEqual(one.imdb, (await catalogue.findFilm({ title: 'Metropolis' })).one.imdb);
   // Its other English names count as its name too.
   assert.equal((await catalogue.findFilm({ title: 'Nosferatu, a Symphony of Horror' })).one.year, 1922);
 });
@@ -578,6 +581,7 @@ test('a show comes with its episode guide', async () => {
   assert.equal(one.seasons[2].date, '2017-03-01');
   assert.equal(one.next, null);
   assert.deepEqual(one.last, { season: 5, episode: 6, date: '2019-03-06' });
+  assert.match(one.imdb, /^tt\d+$/);
 });
 
 test('a show still running says how far it has got', async () => {

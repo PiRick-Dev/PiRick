@@ -886,7 +886,7 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   seen.torrents.push(dead, album);
 
   const settings = await getJson('/api/admin/upkeep');
-  assert.deepEqual([settings.enabled, settings.stuckHours, settings.log], [true, 6, []]);
+  assert.deepEqual([settings.enabled, settings.stuckHours, settings.fixMatches, settings.log], [true, 6, true, []]);
 
   // First look: every unfinished download is adopted; nothing has had time to be stuck.
   assert.deepEqual((await run()).result, { watching: 3, stuck: 0, replaced: 0 });
@@ -937,7 +937,13 @@ test('a stuck download is replaced, and its owner is told in PiRick’s voice on
   assert.equal((await put({ enabled: 'yes', stuckHours: 6 })).status, 400);
   assert.equal((await (await put({ enabled: false, stuckHours: 12 })).json()).stuckHours, 12);
   assert.equal((await getJson('/api/admin/upkeep')).enabled, false);
+  // Correcting what Plex matches wrongly is on unless it is switched off, and an older page that does not send it leaves it on.
+  assert.equal((await getJson('/api/admin/upkeep')).fixMatches, true);
+  assert.equal((await put({ enabled: true, stuckHours: 6, fixMatches: 'no' })).status, 400);
+  assert.equal((await (await put({ enabled: true, stuckHours: 6, fixMatches: false })).json()).fixMatches, false);
+  assert.equal((await getJson('/api/admin/upkeep')).fixMatches, false);
   await put({ enabled: true, stuckHours: 6 });
+  assert.equal((await getJson('/api/admin/upkeep')).fixMatches, true);
   seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== album.hash);
 });
 
