@@ -1,10 +1,10 @@
 import { randomInt } from 'node:crypto';
-import { GENRES, fame, sayDate, standing } from './catalogue.js';
+import { GENRES, fame, inLatinLetters, sayDate, standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
 import { log } from './log.js';
-import { createLookups, filmLine, guideOf, heldAgainst, listOf, neighbours, numbered, showLine, titled, whenDue } from './lookups.js';
+import { alikeLines, createLookups, filmLine, guideOf, heldAgainst, listOf, neighbours, numbered, plexNames, showLine, taggedNames, titled, whenDue } from './lookups.js';
 import { BASE_TAG, formatBytes, userTag } from './qbittorrent.js';
 import { describeContents, describePart, lastAired, parseRelease, parseWanted, planShow } from './releases.js';
 import { createFinder, splitQuery } from './search.js';
@@ -33,12 +33,15 @@ const MAX_LISTED_DOWNLOADS = 20;
 const FILM_SEARCHES = new Set(['movie', 'anime', 'any']);
 // Searches that are for a film and nothing else, so the catalogue's word on which film is acted on.
 const SURELY_FILMS = new Set(['movie', 'anime']);
+// How many of a film's other names are searched for copies of it.
+const MAX_FILM_NAMES_TRIED = 2;
 const MAX_PLEX_LOOKUPS = 4;
+// How well known (see `fame`) a film has to be for a show of the same name not to be looked for as well.
+const LITTLE_KNOWN = 0.3;
 // How long "you already have this" stays said. Past that, PiRick says it again before fetching another copy.
 const PLEX_ANSWER_MS = 30 * 60 * 1000;
 const MAX_PLEX_TOLD = 500;
 // How release names mark which of two same-named shows they are: "Kestrelmere.US.S01", "Kestrelmere.UK.S01".
-const COUNTRY_TAGS = { US: ['US', 'USA'], GB: ['UK', 'GB'] };
 // No 0/o, 1/l/i: ids are copied by a language model and read by people.
 const ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 
@@ -166,6 +169,31 @@ function downloadDefinition(libraries) {
   };
 }
 
+/**
+ * The other names copies of a film may be released under, the likeliest first:
+ * the one it was asked for by, its original title, then the rest. `always`
+ * marks the first of those, which is searched however much has been found.
+ */
+function otherNames({ film, askedAs }) {
+  const seen = new Set([titleKey(film.title)]);
+  const names = [];
+  for (const [name, always] of [[askedAs, true], [film.originalTitle, false], ...(film.names ?? []).map((other) => [other, false])]) {
+    const key = titleKey(name);
+    // Not one in letters no release name is written in.
+    if (!key || seen.has(key) || !inLatinLetters(name)) continue;
+    seen.add(key);
+    names.push({ name, always });
+  }
+  return names.slice(0, MAX_FILM_NAMES_TRIED);
+}
+
+/** How many episodes a show has had in all, in its first season and in its longest: what tells a number that is not a season's own. */
+const sizesOf = (show) => ({
+  total: show.seasons.reduce((sum, part) => sum + part.aired, 0),
+  first: show.seasons[0]?.episodes ?? 0,
+  largest: Math.max(0, ...show.seasons.map((part) => part.episodes)),
+});
+
 function newId() {
   let id = '';
   for (let i = 0; i < 4; i++) id += ID_ALPHABET[randomInt(ID_ALPHABET.length)];
@@ -263,6 +291,21 @@ function createResultCache() {
       byUser.delete(userId);
     },
   };
+}
+
+/**
+ * The film a copy was fetched as: the one the catalogue named for the search
+ * that found it (`known`: its title, year and the number IMDb gives it),
+ * unless the copy's own name says it is something else, an episode or a film
+ * of another year. Null when nothing named one. Plex is later held to it.
+ */
+export function filmMeant(known, release) {
+  if (!known?.imdb) return null;
+  const copy = parseRelease(release);
+  if (copy.kind !== 'movie' && copy.kind !== 'unknown') return null;
+  // Sources differ by a year about when a film came out, not by two.
+  if (copy.kind === 'movie' && known.year && Math.abs(copy.year - known.year) > 1) return null;
+  return { kind: 'film', title: known.title, year: known.year, imdb: known.imdb };
 }
 
 export function createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue }) {
@@ -374,8 +417,14 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (!catalogue?.enabled || !FILM_SEARCHES.has(mediaType)) return undefined;
     const asked = splitQuery(query);
     if (!asked.title || asked.episodes) return undefined;
-    const found = await askCatalogue(() => catalogue.findFilm({ title: asked.title, year: asked.year }));
+    let found = await askCatalogue(() => catalogue.findFilm({ title: asked.title, year: asked.year }));
     if (!found) return undefined;
+    // A number that reads as a year may be the end of the name. When nothing of the shorter name is from
+    // that year, the whole of it is tried as a name, and taken when a film is called exactly that.
+    if (asked.year != null && (found.none || found.wrongYear || found.inexact)) {
+      const whole = await askCatalogue(() => catalogue.findFilm({ title: `${asked.title} ${asked.year}` }));
+      if (whole && !whole.none && !whole.inexact) [found, asked.title, asked.year] = [whole, `${asked.title} ${asked.year}`, null];
+    }
     const sure = SURELY_FILMS.has(mediaType);
     const named = `“${asked.title}”`;
     const otherwise = sure ? '' : ' If the user is after something else of this name (an album, a book, a game), call search_media again with media_type set to that.';
@@ -398,6 +447,25 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       const films = found.one ? [found.one] : found.several;
       return { says: [`The catalogue has ${films.length === 1 ? 'a film' : 'films'} with a name like this: ${films.map(titled).join('; ')}.`] };
     }
+    // A film has exactly this name. So may a show, and be far the better known of the two. A little-known
+    // film is where that is likely, and looking costs a request, so it is only looked into for those.
+    const best = found.one ?? found.several[0];
+    if (!found.inexact && asked.year == null && fame(best) < LITTLE_KNOWN) {
+      const show = await askCatalogue(() => catalogue.findShow({ title: asked.title }));
+      const exact = show && !show.none && !show.inexact ? (show.one ?? show.several[0]) : null;
+      if (exact && fame(exact) >= LITTLE_KNOWN && fame(exact) >= fame(best) * 3) {
+        const says = `The catalogue lists ${titled(exact)} as a TV show, far better known than the film of the same name, ${titled(best)}.`;
+        if (!sure) return { says: [`${says} If the show is what the user wants, call find_show for it.`] };
+        turn.status(`Looked up ${named}: it is a TV show`, 'search');
+        return {
+          output: {
+            results: [],
+            catalogue: says,
+            note: `Nothing was searched for. If the user means the show, call find_show for it instead. If they do mean the film, call search_media again with its year: ${best.title} ${best.year ?? ''}.`.replace(/ \.$/, '.'),
+          },
+        };
+      }
+    }
 
     const wrongYear = found.wrongYear ? `No film called ${named} is from ${asked.year}.` : '';
     if (found.several) {
@@ -407,6 +475,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           results: [],
           catalogue: [wrongYear, `${found.inexact ? 'These films have names like' : 'More than one film is called'} ${named}.`].filter(Boolean).join(' '),
           which_one: found.several.map((film) => filmLine(film, { about: true })),
+          ...(found.alike && { names_that_begin_the_same: alikeLines(found.alike) }),
           note: `Nothing was searched for yet. If what the user said settles which of these they mean (a year, a director, an actor), call search_media again with that title and its year. Otherwise ask the user which one, giving the years.${otherwise}`,
         },
       };
@@ -435,8 +504,12 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     else says.push(`This is ${filmLine(film)}.`);
     if (found.others) says.push(`${found.others === 1 ? 'One lesser-known film has' : `${found.others} lesser-known films have`} the same name.`);
     if (neighbours(film)) says.push(neighbours(film));
+    // "The new one", "the third one": the rest of a series is where those are.
+    if (found.alike) says.push(`Other films whose names begin the same way: ${alikeLines(found.alike).join('; ')}.`);
     if (wrongYear || found.inexact) turn.status(`Took ${named}${asked.year ? ` (${asked.year})` : ''} to be ${titled(film)}`, 'info');
-    return { film, searchFor: [film.title, film.year, ...asked.copy].filter(Boolean).join(' '), says };
+    // Asked for by another of its names, and not by a misspelling of one: copies may go by that name too.
+    const askedAs = !found.inexact && titleKey(asked.title) !== titleKey(film.title) ? asked.title : null;
+    return { film, searchFor: [film.title, film.year, ...asked.copy].filter(Boolean).join(' '), copy: asked.copy, askedAs, says };
   }
 
   /**
@@ -450,9 +523,14 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
    */
   async function showAsked(user, turn, asked, { season, episode, latest }) {
     if (!catalogue?.enabled) return undefined;
-    const wanted = parseWanted(asked);
-    const found = await askCatalogue(() => catalogue.findShow({ title: wanted.name, year: wanted.year }));
+    let wanted = parseWanted(asked);
+    let found = await askCatalogue(() => catalogue.findShow({ title: wanted.name, year: wanted.year }));
     if (!found) return undefined;
+    // A number that reads as a year may be the end of the name, as with a film.
+    if (wanted.year != null && (found.none || found.wrongYear || found.inexact)) {
+      const whole = await askCatalogue(() => catalogue.findShow({ title: asked }));
+      if (whole && !whole.none && !whole.inexact) [found, wanted] = [whole, { name: asked, key: titleKey(asked), year: null }];
+    }
     const named = `“${wanted.name}”`;
 
     // No show has exactly that name. A film may.
@@ -468,7 +546,10 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       if (found.none) return { says: [`The catalogue knows no show called ${named}.`], unknown: true };
     }
     const wrongYear = found.wrongYear ? `No show called ${named} began in ${wanted.year}.` : '';
-    if (found.several) {
+    // Several shows have the name. Asked for a season that only one of them has got to, that one is meant.
+    const reached = found.several && season && !latest ? found.several.filter((other) => other.seasons.some((part) => part.number === season && part.aired > 0)) : [];
+    const settled = reached.length === 1 ? reached[0] : null;
+    if (found.several && !settled) {
       turn.status(`Looked up ${named}: ${found.several.length} shows share that name`, 'search');
       return {
         output: {
@@ -480,16 +561,25 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       };
     }
 
-    const show = found.one;
+    const show = settled ?? found.one;
     const says = [];
     if (wrongYear) says.push(`${wrongYear} The show of that name is ${showLine(show)}, and that is what was looked for.`);
     else if (found.inexact) says.push(`Nothing is called ${named}. The nearest is ${showLine(show)}, and that is what was looked for.`);
     else says.push(`This is ${showLine(show)}.`);
+    if (settled) {
+      const rest = found.several.length - 1;
+      says.push(`${rest === 1 ? 'One other show has' : `${rest} other shows have`} the same name, and ${rest === 1 ? 'it has' : 'none of them has'} no season ${season}.`);
+      turn.status(`Took ${named} to be ${titled(show)}, the only show of that name with a season ${season}`, 'info');
+    }
     if (found.others) says.push(`${found.others === 1 ? 'One lesser-known show has' : `${found.others} lesser-known shows have`} the same name.`);
     if (wrongYear || found.inexact) turn.status(`Took ${named}${wanted.year ? ` (${wanted.year})` : ''} to be ${titled(show)}`, 'info');
 
     const guide = guideOf(show);
-    if (!guide) return { show, guide: null, says };
+    // Whether other shows have this name, and whether one of them is the better known, decides how it is looked for.
+    const namesakes = settled
+      ? { shared: true, outshone: found.several.some((other) => other !== show && other.known >= show.known) }
+      : { shared: Boolean(found.shared), outshone: Boolean(found.outshone) };
+    if (!guide) return { show, guide: null, says, ...namesakes };
     const next = show.next?.date ? ` It is due on ${sayDate(show.next.date)}.` : '';
     /** There is nothing to look for, and saying why is a complete answer. */
     const nothing = (why, note) => {
@@ -512,16 +602,17 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       const number = meant ?? 1;
       const of = guide.get(number);
       if (of && episode > of.aired) {
-        // A season that is over has all the episodes it will ever have.
-        if (of.aired === of.episodes && (over || number < last)) {
-          return nothing(`Season ${number} of ${show.title} has ${episodeCount(of.episodes)}. There is no episode ${episode}.`, 'Tell the user how many episodes the season has.');
+        // A season that is over has all the episodes it will ever have. The latest of a show still running has all that are listed.
+        if (of.aired === of.episodes) {
+          const sofar = over || number < last ? '' : ' so far';
+          return nothing(`Season ${number} of ${show.title} has ${episodeCount(of.episodes)}${sofar}. There is no episode ${episode}.`, 'Tell the user how many episodes the season has.');
         }
         const due = show.next?.season === number && show.next.episode === episode ? next : '';
         return nothing(`Only ${episodeCount(of.aired)} of season ${number} of ${show.title} ${of.aired === 1 ? 'has' : 'have'} aired so far.${due}`, 'Tell the user that episode has not aired yet, and when it is due if that is known.');
       }
     }
     if (show.next?.date) says.push(`The next episode, season ${show.next.season} episode ${show.next.episode}, is due on ${sayDate(show.next.date)}.`);
-    return { show, guide, season: latest ? last : undefined, says };
+    return { show, guide, season: latest ? last : undefined, says, ...namesakes };
   }
 
   // Searches can take a while behind a Cloudflare solver, so each one is announced.
@@ -546,12 +637,26 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     if (!title) {
       return { reply: { ok: false, error: `${library.name} keeps each show in its own folder. Call download again with title set to the name of the show.` } };
     }
-    let folder = title;
+    // One of several shows with a name gets its year in its folder's name, as Plex writes it, so that
+    // two shows are never saved into one folder.
+    const dated = known?.shared && known.year ? cleanFolderName(`${known.title} (${known.year})`) : '';
+    let folder = dated || title;
     // Only claim the folder is new when qBittorrent confirmed it is not there.
     let created = Boolean(folders);
     if (folders) {
       let found = findFolder(title, folders);
-      if (known && !found.match) {
+      const called = (wanted) => folders.find((other) => other.toLowerCase() === String(wanted).toLowerCase());
+      // Where Plex keeps the show is where the rest of it belongs, whatever that folder is called.
+      const inPlex = (known?.inPlex ?? []).map(called).find(Boolean);
+      if (inPlex) found = { match: inPlex };
+      else if (dated) {
+        // A folder is this show's when it says so, by the year, the country or another name of the show.
+        // One with only the name the two share could as well be the other's.
+        const key = titleKey(title);
+        const marked = folders.find((other) => titleKey(other) === key && other.includes(String(known.year)));
+        const under = [...(known.tagged ?? []), ...known.names.filter((other) => titleKey(other) !== key)].map((other) => findFolder(other, folders).match).find(Boolean);
+        found = { match: marked ?? under };
+      } else if (known && !found.match) {
         // The catalogue knows the show's other names, so a folder under one of them is this show's.
         const under = known.names.map((other) => findFolder(other, folders).match).find(Boolean);
         // Folders that share its name are told apart by the year in theirs.
@@ -631,7 +736,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
    * Hands one release to qBittorrent unless it is already there. Resolves to
    * the existing torrent (as `qbit.find` gives it) or null when it was added.
    */
-  async function addUnlessPresent(user, release, target) {
+  async function addUnlessPresent(user, release, target, meant) {
     let hash = release.infoHash;
     let existing = hash ? await qbit.find(hash) : null;
     if (!existing) {
@@ -644,7 +749,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       if (!existing) {
         await qbit.add({ ...source, ...target });
         // Upkeep now knows to watch for it finishing, however soon that is.
-        upkeep?.track({ hash, name: release.title, username: user.username });
+        upkeep?.track({ hash, name: release.title, username: user.username, meant });
         return null;
       }
     }
@@ -659,6 +764,8 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
     const target = { category: library.category, savePath: spot.savePath, tags: [BASE_TAG, userTag(user.username)] };
     const total = entry.parts.reduce((sum, part) => sum + part.releases.length, 0);
     const counts = { started: 0, already: 0, failed: 0 };
+    // Which show the catalogue said this is, for seeing later that Plex took it for the same one.
+    const meant = entry.known?.imdb ? { kind: 'show', title: entry.known.title, year: entry.known.year, imdb: entry.known.imdb } : null;
     let done = 0;
     // "(new folder)" is worth saying once, on the first line, not on every part.
     let label = spot.label;
@@ -669,7 +776,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         done += 1;
         if (total > 1) turn.emit({ type: 'working', text: `Starting download ${done} of ${total}…` });
         try {
-          outcome[(await addUnlessPresent(user, release, target)) ? 'already' : 'started'] += 1;
+          outcome[(await addUnlessPresent(user, release, target, meant)) ? 'already' : 'started'] += 1;
         } catch (err) {
           outcome.failed += 1;
           log.warn('download failed', { user: user.username, title: release.title, error: describeError(err) });
@@ -733,19 +840,32 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         return known.output;
       }
       const asked = query;
-      // A film the catalogue has named is searched for under its proper title and year, and failing that its original title.
-      const spellings = known?.film ? [known.searchFor, ...(known.film.originalTitle ? [[known.film.originalTitle, known.film.year].filter(Boolean).join(' ')] : [])] : [query];
+      // A film the catalogue has named is searched for under its proper title and year.
+      if (known?.film) query = known.searchFor;
       let found;
       let also;
       let exact;
       let foundAs;
       try {
-        for (query of spellings) {
-          // Searches other spellings too ("7 Chances" is released as "Seven.Chances") and
-          // drops results that are not about what was asked for.
-          ({ results: found, also, exact, foundAs } = await finder.search(query, TORZNAB_CATEGORIES[mediaType], { onTry: announce(turn) }));
-          if (exact && found.length) break;
+        // Searches other spellings too ("7 Chances" is released as "Seven.Chances") and
+        // drops results that are not about what was asked for.
+        const search = (words) => finder.search(words, TORZNAB_CATEGORIES[mediaType], { onTry: announce(turn) });
+        ({ results: found, also, exact, foundAs } = await search(query));
+        // Copies of a film go by its other names as well. The name it was asked for by, when that is another of
+        // them, is always searched too; its original title and the rest only while no copy has turned up.
+        const copies = new Map((exact ? found : []).map((result) => [result.infoHash ?? result.title, result]));
+        for (const { name, always } of known?.film ? otherNames(known) : []) {
+          if (!always && copies.size) break;
+          const words = [name, known.film.year, ...known.copy].filter(Boolean).join(' ');
+          // What the first search found stands, whatever becomes of these.
+          const under = await finder.search(words, TORZNAB_CATEGORIES[mediaType], { onTry: announce(turn), asWritten: true }).catch(() => null);
+          if (!under) break;
+          also.push(words, ...under.also);
+          if (!under.exact) continue;
+          if (!copies.size) foundAs = words;
+          for (const result of under.results) if (!copies.has(result.infoHash ?? result.title)) copies.set(result.infoHash ?? result.title, result);
         }
+        if (copies.size) [found, exact] = [[...copies.values()].sort((a, b) => b.seeders - a.seeders), true];
       } catch (err) {
         log.warn('search failed', { user: user.username, query: asked, error: describeError(err) });
         turn.status(`The search for “${query}” failed${detail(user, err)}`, 'error');
@@ -761,7 +881,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         const film = filmOf(contents[i]);
         if (film) tellInPlex(user, turn, `film ${film.id}`);
         return {
-          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, year: known.film.year, names: known.film.names } }) }),
+          id: cache.put(user.id, { ...result, ...(film && { inPlex: { key: `film ${film.id}`, label: filmLabel(film) } }), ...(known?.film && { known: { title: known.film.title, year: known.film.year, names: known.film.names, imdb: known.film.imdb } }) }),
           title: result.title,
           kind: kindOf(result.categories),
           contains: describeContents(contents[i]),
@@ -835,7 +955,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       const episode = whole(args.episode);
       const quality = Number.parseInt(args.quality, 10) || 1080;
       // Only a catalogue can say which season is the latest.
-      const latest = Boolean(catalogue?.enabled) && args.latest === true && !season && !episode;
+      const latest = Boolean(catalogue?.enabled) && args.latest === true && !season;
 
       turn.searched = true;
       const searchKey = `show|${asked.toLowerCase()}|${season}|${episode}|${quality}${latest ? '|latest' : ''}`;
@@ -861,10 +981,12 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
 
       // What Plex has of this show: undefined when it was not asked, null when it has none.
       const wanted = parseWanted(title);
+      // The show's name with its country after it, which is how release names, folders and Plex tell namesakes apart.
+      const tagged = listed ? taggedNames(listed) : [];
       const inPlex = await askPlex(async () => {
         if (!listed) return plex.show(wanted.name, wanted.year);
-        // Plex may have it filed under another of its names.
-        for (const name of listed.names.slice(0, MAX_PLEX_LOOKUPS)) {
+        // Plex may have it filed under another of its names, or with its country: "Kestrelmere (US)".
+        for (const name of plexNames(listed)) {
           const under = await plex.show(name, listed.year);
           if (under) return under;
         }
@@ -932,7 +1054,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       // while single episodes it lacks still are.
       const has = (number, part) => Boolean(held.get(number)?.has(part));
       const skip = ({ parsed }) => {
-        if (parsed.kind === 'episode') return has(parsed.season ?? 1, parsed.episode);
+        if (parsed.kind === 'episode') return (parsed.episodes ?? [parsed.episode]).every((part) => has(parsed.season ?? 1, part));
         if (parsed.kind === 'season' || parsed.kind === 'seasons') return parsed.seasons.some((number) => held.has(number));
         return parsed.kind === 'series';
       };
@@ -942,8 +1064,6 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       const settled = new Set([...held.keys()].filter((number) => (guide ? lacking(number)?.length === 0 : number < lastHeld)));
       const leaveOut = (allOfIt && held.size > 0) || theRest;
 
-      // The show's other names, and its name with its country after it, which is how releases tell namesakes apart.
-      const names = listed ? [...listed.names, ...listed.countries.flatMap((code) => COUNTRY_TAGS[code] ?? [code]).map((tag) => `${listed.title} ${tag}`)] : [];
       const options = {
         title,
         season,
@@ -952,16 +1072,20 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         maxBytes: config.maxTorrentBytes,
         atOnce: config.jackett.searchesAtOnce,
         ...(leaveOut && { skip, settled, inParts: true }),
-        ...(listed && { names, year: listed.year, guide }),
+        ...(listed && { names: listed.names, tagged, year: listed.year, guide, sure: true, shared: known.shared, crowded: known.outshone, fansub: listed.anime, sizes: sizesOf(listed) }),
       };
       let found;
+      // Set when what there is of the show is numbered straight through it, which no plan by seasons can use.
+      let straight = false;
       try {
         // planShow decides for itself which releases are this show, so only the other spellings are wanted here.
-        const search = async (query) => (await finder.search(query, TORZNAB_CATEGORIES.tv, { filter: false, onTry: announce(turn) })).results;
+        const search = async (query, name) => (await finder.search(query, TORZNAB_CATEGORIES.tv, { filter: false, onTry: announce(turn), title: name })).results;
         found = await planShow(search, options);
-        // Nothing under its usual name: it may be released under another.
-        for (const other of listed && !found.plan?.torrents ? listed.names.filter((name) => titleKey(name) !== titleKey(title)).slice(0, 2) : []) {
+        straight = Boolean(found.plan?.straight);
+        // Nothing under its usual name: it may be released under another. Not under what it is called abroad, which no release name uses.
+        for (const other of listed && !found.plan?.torrents ? listed.ownNames.filter((name) => titleKey(name) !== titleKey(title)).slice(0, 2) : []) {
           found = await planShow(search, { ...options, title: other });
+          straight ||= Boolean(found.plan?.straight);
           if (found.plan?.torrents) break;
         }
       } catch (err) {
@@ -990,6 +1114,17 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           note: theRest
             ? 'The episodes Plex lacks could not be found, so there is nothing to download. Tell the user what they already have and which episodes could not be found.'
             : 'Nothing more of this show could be found beyond what Plex already has, so there is nothing to download. Tell the user what they already have.',
+        };
+      } else if (!found.plan.torrents && straight) {
+        const { total } = sizesOf(listed);
+        turn.status(`Looked for ${what}: its ${total} episodes are numbered straight through, and nothing holds all of them`, 'search');
+        turn.known = true;
+        output = {
+          found: false,
+          ...catalogueSays,
+          ...(plexSays && { plex: plexSays }),
+          releases: `Copies of ${title} are numbered straight through its ${total} episodes, not by season, and no pack was found that holds all of them.`,
+          note: 'Nothing can be fetched by season or as a whole. Tell the user that, and ask which episodes they are after. For one episode, call find_show with episode set to its number in the whole show, and no season.',
         };
       } else if (!found.plan.torrents) {
         turn.status(`Looked for ${what}: nothing found`, 'search');
@@ -1022,7 +1157,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           title: `${show}: ${summary}`,
           parts: plan.parts,
           ...(askFirst && { inPlex: askFirst }),
-          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names } }),
+          ...(listed && { known: { title: listed.title, year: listed.year, names: listed.names, tagged, shared: known.shared, inPlex: inPlex?.folders ?? [], imdb: listed.imdb } }),
         });
         log.info('show plan', { user: user.username, title, season, episode, torrents: plan.torrents, summary });
         turn.status(`Found ${what}: ${summary} (${total})`, 'search');
@@ -1168,7 +1303,7 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         const spot = await place(user, library, result.title, args, turn, id, result.known);
         if (spot.reply) return spot.reply;
         label = spot.label;
-        const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags });
+        const existing = await addUnlessPresent(user, result, { category: library.category, savePath: spot.savePath, tags }, filmMeant(result.known, result.title));
         if (existing) return alreadyThere(existing);
         log.info('download started', {
           user: user.username,

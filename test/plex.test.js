@@ -19,6 +19,7 @@ const { createPlex, matchLibrary, plexPath } = await import('../src/plex.js');
 const { createSettings, parsePlexChoice } = await import('../src/settings.js');
 const { createUpkeep } = await import('../src/upkeep.js');
 const { PLEX_TOKEN, PLEX_URL, plexStandIn } = await import('../bench/plex.js');
+const { WORLD } = await import('../bench/works.js');
 const { createWorld, scripted } = await import('../bench/world.js');
 
 const MINUTE = 60 * 1000;
@@ -67,7 +68,7 @@ after(() => {
 async function listen(standIn) {
   const server = http.createServer(async (req, res) => {
     try {
-      const response = await standIn.fetch(`http://plex${req.url}`, { headers: req.headers });
+      const response = await standIn.fetch(`http://plex${req.url}`, { headers: req.headers, method: req.method });
       res.writeHead(response.status, { 'Content-Type': response.headers.get('content-type') ?? 'text/plain' }).end(await response.text());
     } catch {
       // The stand-in is playing a server that is not there.
@@ -418,6 +419,339 @@ test('a download still being moved into place is not announced, and one that sta
   assert.equal(upkeep.inPlex().size, 0);
 });
 
+// ---- What Plex took a download for ---------------------------------------------
+
+// What Plex's own search knows: two shows of one name, and two films of another.
+const KNOWN = [
+  { imdb: 'tt0001963', kind: 'show', title: 'Kestrelmere', year: 1963 },
+  { imdb: 'tt0002005', kind: 'show', title: 'Kestrelmere (US)', year: 2005 },
+  { imdb: 'tt0001984', kind: 'movie', title: 'Brindle', year: 1984 },
+  { imdb: 'tt0002021', kind: 'movie', title: 'Brindle', year: 2021 },
+];
+// What the catalogue said each download was, when the chat started it.
+const OLD_SHOW = { kind: 'show', title: 'Kestrelmere', year: 1963, imdb: 'tt0001963' };
+const OLD_FILM = { kind: 'film', title: 'Brindle', year: 1984, imdb: 'tt0001984' };
+const NEW_SHOW_IN_PLEX = { title: 'Kestrelmere (US)', year: 2005, imdb: 'tt0002005' };
+
+/** A Plex with nothing in it yet. Things arrive as a scan would bring them, with `add`. */
+const emptyPlex = (knows = KNOWN) =>
+  plexStandIn(
+    [
+      { key: '1', title: 'Films', type: 'movie', folders: ['/data/Movies'], items: [] },
+      { key: '2', title: 'TV Shows', type: 'show', folders: ['/data/TV'], items: [] },
+    ],
+    { knows },
+  );
+/** A season of the show two share a name with, saved in a folder under the bare name. */
+const seasonOf = (season, folder = 'Kestrelmere') => {
+  const name = `Kestrelmere.S0${season}.1080p.WEB.H264-GRP`;
+  return torrent(name, { save_path: `/media/TV/${folder}`, content_path: `/media/TV/${folder}/${name}` });
+};
+/** Where Plex sees the episodes of such a download. */
+const episodesOf = (download, count = 2) => {
+  const [, season] = /S(\d\d)/.exec(download.name);
+  return Array.from({ length: count }, (unused, i) => `${download.content_path.replace('/media/', '/data/')}/Kestrelmere.S${season}E0${i + 1}.mkv`);
+};
+const filmCopy = (name = 'Brindle.1080p.BluRay.x264-GRP') => torrent(name, { save_path: '/media/Movies', content_path: `/media/Movies/${name}` });
+/** Upkeep with these downloads started by the chat, each fetched as what is given with it, and all of them finished. */
+async function fetched(downloads, plexServer = emptyPlex()) {
+  const world = watching(downloads.map(([download]) => download), { plexServer });
+  for (const [download, meant, username = 'alice'] of downloads) world.upkeep.track({ hash: download.hash, name: download.name, username, meant });
+  await world.look();
+  world.finish();
+  await world.look();
+  world.asked = () => plexServer.requests.filter((request) => request.search.includes('file=')).length;
+  return world;
+}
+
+test('the client finds what holds a download, what Plex took it for, and what Plex would take it for instead', async () => {
+  const server = emptyPlex();
+  const wrong = server.add('2', { ...NEW_SHOW_IN_PLEX, files: ['/data/TV/Kestrelmere/Kestrelmere.S01.1080p.WEB.H264-GRP/Kestrelmere.S01E01.mkv', '/data/TV/Kestrelmere/Kestrelmere.S01.1080p.WEB.H264-GRP/Kestrelmere.S01E02.mkv'] });
+  server.add('2', { title: 'Kestrelmere', year: 1963, imdb: 'tt0001963', files: ['/data/TV/Kestrelmere (1963)/Season 01/Kestrelmere - S01E01.mkv'] });
+  const unplaced = server.add('1', { title: 'Brindle', unmatched: true, files: ['/data/Movies/Brindle.1080p.BluRay.x264-GRP/Brindle.1080p.BluRay.x264-GRP.mkv'] });
+  const url = await listen(server);
+  const plex = createPlex({ url, token: PLEX_TOKEN, timeoutMs: 5000 });
+
+  // Plex finds every path with the text in it. Only what lies in the folder counts, not what lies in one named like it.
+  const [show, ...more] = await plex.holding('2', '/data/TV/Kestrelmere');
+  assert.deepEqual(more, []);
+  assert.deepEqual(show, { id: wrong, kind: 'show', title: 'Kestrelmere (US)', year: 2005, matched: true, imdb: 'tt0002005', folders: ['/data/TV/Kestrelmere'] });
+  assert.deepEqual((await plex.holding('2', '/data/TV/Kestrelmere/Kestrelmere.S01.1080p.WEB.H264-GRP/Kestrelmere.S01E02.mkv')).map((item) => item.id), [wrong], 'a single file is found as well');
+  assert.deepEqual(await plex.holding('2', '/data/TV/Wrenfield Cross'), []);
+  assert.deepEqual(await plex.holding('9', '/data/TV/Kestrelmere'), [], 'a library Plex does not have holds nothing');
+  assert.equal((await plex.filesOf(show)).length, 2);
+
+  const [film] = await plex.holding('1', '/data/Movies/Brindle.1080p.BluRay.x264-GRP');
+  assert.deepEqual(film, { id: unplaced, kind: 'movie', title: 'Brindle', year: null, matched: false, imdb: null, folders: [] });
+  assert.deepEqual(await plex.filesOf(film), ['/data/Movies/Brindle.1080p.BluRay.x264-GRP/Brindle.1080p.BluRay.x264-GRP.mkv']);
+
+  // Asked by number, Plex has one answer or none. A number for a show is no answer about a film.
+  assert.deepEqual(await plex.candidate(show, 'tt0001963'), { guid: 'plex://show/tt0001963', name: 'Kestrelmere', year: 1963 });
+  assert.equal(await plex.candidate(show, 'tt7777777'), null);
+  assert.equal(await plex.candidate(film, 'tt0001963'), null);
+
+  await plex.match(film, await plex.candidate(film, 'tt0001984'));
+  assert.deepEqual(server.matches, [{ id: unplaced, imdb: 'tt0001984', name: 'Brindle', year: '1984' }]);
+  assert.deepEqual((await plex.holding('1', '/data/Movies/Brindle.1080p.BluRay.x264-GRP'))[0], { id: unplaced, kind: 'movie', title: 'Brindle', year: 1984, matched: true, imdb: 'tt0001984', folders: [] });
+
+  // Telling Plex is the one request that is not a read. The token rides in its header like any other.
+  assert.deepEqual(server.requests.filter((request) => request.method).map((request) => [request.method, request.path]), [['PUT', `/library/metadata/${unplaced}/match`]]);
+  for (const request of server.requests) {
+    assert.equal(request.token, PLEX_TOKEN);
+    assert.equal((request.path + request.search).includes(PLEX_TOKEN), false, 'never in an address');
+  }
+});
+
+test('a show Plex took for its namesake is corrected once, and whoever asked is told', async () => {
+  const season = seasonOf(1);
+  const { upkeep, plexServer, look, notes } = await fetched([[season, OLD_SHOW]]);
+  assert.deepEqual(notes(), ['“Kestrelmere (season 1)” has finished downloading and Plex has been asked to add it.']);
+
+  // Plex has not got to it yet.
+  await look();
+  assert.deepEqual(plexServer.matches, []);
+
+  // It takes the folder for the better-known show of the name.
+  const id = plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: episodesOf(season) });
+  await look();
+  assert.deepEqual(plexServer.matches, [{ id, imdb: 'tt0001963', name: 'Kestrelmere', year: '1963' }]);
+  assert.equal(notes().length, 1, 'nothing is said until Plex shows the change');
+
+  await look();
+  assert.equal(notes()[1], 'Plex had filed “Kestrelmere” (1963) as “Kestrelmere (US)” (2005). That has been corrected.');
+  assert.deepEqual([upkeep.recent()[0].action, upkeep.recent()[0].username], ['filed', 'alice']);
+  assert.deepEqual([plexServer.item(id).title, plexServer.item(id).year], ['Kestrelmere', 1963]);
+
+  // Someone would rather have it as it was, and changes it back in Plex: after its one check, it is theirs.
+  Object.assign(plexServer.item(id), NEW_SHOW_IN_PLEX);
+  const before = plexServer.requests.length;
+  await look();
+  await look(60);
+  assert.equal(plexServer.matches.length, 1);
+  assert.equal(plexServer.requests.length, before, 'and Plex is not asked about it again');
+  assert.equal(notes().length, 2);
+  assert.equal(logged.some((line) => line.includes(PLEX_TOKEN)), false);
+});
+
+test('a match a person has changed is not changed back when more of the show arrives', async () => {
+  const first = seasonOf(1);
+  const { upkeep, state, plexServer, look, notes, finish } = await fetched([[first, OLD_SHOW]]);
+  const id = plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: episodesOf(first) });
+  await look();
+  await look();
+  assert.equal(plexServer.matches.length, 1);
+  // Whoever runs Plex knows better, or wants it so, and sets it back.
+  Object.assign(plexServer.item(id), NEW_SHOW_IN_PLEX);
+
+  // The next season is fetched as the same show and lands in the same folder, beside what has had its check.
+  const second = seasonOf(2);
+  state.torrents.push(second);
+  upkeep.track({ hash: second.hash, name: second.name, username: 'alice', meant: OLD_SHOW });
+  await look();
+  finish();
+  await look();
+  plexServer.item(id).files.push(...episodesOf(second));
+  await look();
+  await look();
+  assert.equal(plexServer.matches.length, 1, 'Plex is not told again');
+  assert.deepEqual([plexServer.item(id).title, plexServer.item(id).year], ['Kestrelmere (US)', 2005]);
+  assert.deepEqual(notes().filter((note) => note.startsWith('Plex')), ['Plex had filed “Kestrelmere” (1963) as “Kestrelmere (US)” (2005). That has been corrected.'], 'and nothing more is said of it');
+});
+
+test('a film Plex could not place is told which film it is, once Plex has had time to place it', async () => {
+  const film = filmCopy();
+  const { plexServer, look, notes } = await fetched([[film, OLD_FILM]]);
+  const id = plexServer.add('1', { title: 'Brindle', unmatched: true, files: [`/data/Movies/${film.name}/${film.name}.mkv`] });
+
+  // A new thing shows in Plex before Plex has matched it, so the first sight of it proves nothing.
+  await look();
+  assert.deepEqual(plexServer.matches, []);
+  await look();
+  assert.deepEqual(plexServer.matches, [{ id, imdb: 'tt0001984', name: 'Brindle', year: '1984' }]);
+  await look();
+  assert.equal(notes()[1], 'Plex did not recognise “Brindle” (1984). It has been told which film it is.');
+
+  // One that Plex places itself in that time needs nothing.
+  const slow = await fetched([[filmCopy(), OLD_FILM]]);
+  const later = slow.plexServer.add('1', { title: 'Brindle', unmatched: true, files: [`/data/Movies/${film.name}/${film.name}.mkv`] });
+  await slow.look();
+  Object.assign(slow.plexServer.item(later), { title: 'Brindle', year: 1984, imdb: 'tt0001984', unmatched: false });
+  await slow.look();
+  await slow.look();
+  assert.deepEqual(slow.plexServer.matches, []);
+  assert.equal(slow.notes().length, 1);
+});
+
+test('what Plex took for the right thing is left as it is, and what the catalogue did not name is not looked for', async () => {
+  const season = seasonOf(1);
+  const unnamed = torrent('Wrenfield.Cross.S03E01.1080p.WEB.H264-GRP');
+  const { plexServer, look, notes, asked } = await fetched([[season, OLD_SHOW], [unnamed, undefined]]);
+  plexServer.add('2', { title: 'Kestrelmere', year: 1963, imdb: 'tt0001963', files: episodesOf(season) });
+  // Taken for something else altogether, which nothing here can know.
+  plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: ['/data/TV/Wrenfield Cross/Wrenfield.Cross.S03E01.1080p.WEB.H264-GRP'] });
+  assert.equal(asked(), 1, 'the one the catalogue named was looked for at once, when Plex did not have it yet');
+
+  await look();
+  assert.equal(asked(), 2);
+  await look();
+  await look(60);
+  assert.equal(asked(), 2, 'found right, it is not looked for again');
+  assert.deepEqual(plexServer.matches, []);
+  assert.equal(notes().length, 2, 'the two that finished, and no more');
+});
+
+test('episodes of one show that finish together are settled as one, and each person is told', async () => {
+  const [first, second, third] = [1, 2, 3].map((season) => seasonOf(season));
+  const { upkeep, plexServer, look, notes } = await fetched([[first, OLD_SHOW], [second, OLD_SHOW], [third, OLD_SHOW, 'bob']]);
+  const id = plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: [first, second, third].flatMap((season) => episodesOf(season)) });
+  await look();
+  await look();
+  assert.deepEqual(plexServer.matches, [{ id, imdb: 'tt0001963', name: 'Kestrelmere', year: '1963' }], 'Plex is told once');
+  const corrected = 'Plex had filed “Kestrelmere” (1963) as “Kestrelmere (US)” (2005). That has been corrected.';
+  assert.deepEqual(notes().filter((note) => note.startsWith('Plex')), [corrected]);
+  assert.deepEqual(notes('bob').filter((note) => note.startsWith('Plex')), [corrected]);
+
+  // A season fetched later lands in a show that is right by then.
+  const fourth = seasonOf(4);
+  upkeep.track({ hash: fourth.hash, name: fourth.name, username: 'alice', meant: OLD_SHOW });
+  plexServer.item(id).files.push(...episodesOf(fourth));
+  await look();
+  assert.equal(plexServer.matches.length, 1);
+});
+
+test('what Plex put together with something it already had is left for a person, who is told once', async () => {
+  // The show: Plex has the newer one, and adds the older one's folder to it.
+  const plexServer = emptyPlex();
+  const had = plexServer.add('2', { ...NEW_SHOW_IN_PLEX, title: 'Kestrelmere (2005)', files: ['/data/TV/Kestrelmere (2005)/Season 04/Kestrelmere - S04E01.mkv'] });
+  const season = seasonOf(1);
+  const { upkeep, state, look, notes, finish } = await fetched([[season, OLD_SHOW]], plexServer);
+  plexServer.item(had).files.push(...episodesOf(season));
+  await look();
+  await look();
+  assert.deepEqual(plexServer.matches, [], 'the show that was there is not to be changed');
+  const together =
+    'Plex has put “Kestrelmere” (1963) together with “Kestrelmere (2005)”, which it already had. Only what PiRick added itself is corrected, so this one is left for an admin: in Plex, use Split Apart on it, then Fix Match on the new one.';
+  assert.deepEqual(notes().slice(1), [together]);
+  assert.equal(upkeep.recent()[0].action, 'misfiled');
+
+  // More of it arrives and goes the same way. It has been said.
+  const next = seasonOf(2);
+  state.torrents.push(next);
+  upkeep.track({ hash: next.hash, name: next.name, username: 'alice', meant: OLD_SHOW });
+  await look();
+  finish();
+  await look();
+  plexServer.item(had).files.push(...episodesOf(next));
+  await look();
+  assert.deepEqual(notes().filter((note) => note.startsWith('Plex has put')), [together]);
+  assert.deepEqual(plexServer.matches, []);
+
+  // The film: Plex has the newer one, and takes the older for another copy of it.
+  const films = emptyPlex();
+  const newer = films.add('1', { title: 'Brindle', year: 2021, imdb: 'tt0002021', files: ['/data/Movies/Brindle (2021)/Brindle (2021).mkv'] });
+  const film = filmCopy();
+  const second = await fetched([[film, OLD_FILM]], films);
+  films.item(newer).files.push(`/data/Movies/${film.name}/${film.name}.mkv`);
+  await second.look();
+  assert.deepEqual(films.matches, []);
+  assert.match(second.notes()[1], /^Plex has put “Brindle” \(1984\) together with “Brindle” \(2021\), which it already had\./);
+});
+
+test('what was in Plex before PiRick came to it is not changed, and nobody is troubled with it', async () => {
+  // The folder held episodes from elsewhere, and Plex has had the show as the other one all along.
+  const plexServer = emptyPlex();
+  const had = plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: ['/data/TV/Kestrelmere/Season 01/Kestrelmere - S01E01.mkv'] });
+  const season = seasonOf(2);
+  const { look, notes, asked } = await fetched([[season, OLD_SHOW]], plexServer);
+  plexServer.item(had).files.push(...episodesOf(season));
+  await look();
+  await look();
+  assert.deepEqual(plexServer.matches, []);
+  assert.equal(notes().length, 1);
+  const before = asked();
+  await look(60);
+  assert.equal(asked(), before, 'and that is the end of it');
+
+  // Matched by one of Plex's older agents, which do not say what IMDb calls a thing: right or wrong cannot be told.
+  const older = emptyPlex();
+  const film = filmCopy();
+  const second = await fetched([[filmCopy(), OLD_FILM]], older);
+  older.add('1', { title: 'Brindle', year: 2021, files: [`/data/Movies/${film.name}/${film.name}.mkv`] });
+  await second.look();
+  await second.look();
+  assert.deepEqual(older.matches, []);
+  assert.equal(second.notes().length, 1);
+
+  // Plex's search knows nothing by the number: there is nothing to tell it.
+  const unknowing = emptyPlex(KNOWN.filter((known) => known.imdb !== 'tt0001984'));
+  const third = await fetched([[film, OLD_FILM]], unknowing);
+  unknowing.add('1', { title: 'Brindle', year: 2021, imdb: 'tt0002021', files: [`/data/Movies/${film.name}/${film.name}.mkv`] });
+  await third.look();
+  await third.look();
+  assert.deepEqual(unknowing.matches, []);
+  assert.equal(third.notes().length, 1);
+});
+
+test('a correction Plex does not take is said, not sent again', async () => {
+  const season = seasonOf(1);
+  const { upkeep, plexServer, look, notes } = await fetched([[season, OLD_SHOW]]);
+  plexServer.setDeaf(true);
+  plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: episodesOf(season) });
+  await look();
+  assert.equal(plexServer.matches.length, 1);
+  await look();
+  await look();
+  assert.equal(notes().length, 1, 'Plex is given a few looks to show it');
+  await look();
+  assert.equal(notes()[1], 'Plex has filed “Kestrelmere” (1963) as “Kestrelmere (US)” (2005) and did not take the correction. An admin can put it right in Plex with Fix Match.');
+  assert.equal(upkeep.recent()[0].action, 'misfiled');
+  await look();
+  await look(60);
+  assert.equal(plexServer.matches.length, 1);
+  assert.equal(notes().length, 2);
+});
+
+test('the check waits for Plex, gives up quietly, and can be switched off', async () => {
+  // Plex is out of reach when the check comes round: it is tried again, and nothing is lost.
+  const season = seasonOf(1);
+  const away = await fetched([[season, OLD_SHOW]]);
+  const id = away.plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: episodesOf(season) });
+  away.plexServer.setDown(true);
+  await away.look();
+  await away.look();
+  away.plexServer.setDown(false);
+  await away.look();
+  assert.deepEqual(away.plexServer.matches.map((match) => match.id), [id]);
+
+  // Plex never shows it: after half an hour of looks it is let be, with nothing said.
+  const never = await fetched([[seasonOf(1), OLD_SHOW]]);
+  for (let i = 0; i < 28; i++) await never.look();
+  assert.equal(never.asked(), 29);
+  await never.look();
+  await never.look();
+  await never.look(60);
+  assert.equal(never.asked(), 30);
+  assert.equal(never.notes().length, 1);
+
+  // Switched off under Admin > Upkeep, Plex is not asked what it took anything for.
+  const off = watching([seasonOf(1)], { plexServer: emptyPlex() });
+  off.settings.setUpkeep({ enabled: true, stuckHours: 6, fixMatches: false });
+  off.upkeep.track({ hash: season.hash, name: season.name, username: 'alice', meant: OLD_SHOW });
+  await off.look();
+  off.finish();
+  await off.look();
+  off.plexServer.add('2', { ...NEW_SHOW_IN_PLEX, files: episodesOf(season) });
+  await off.look();
+  await off.look();
+  assert.equal(off.plexServer.scans.length, 1, 'Plex is still asked to pick the download up');
+  assert.deepEqual(off.plexServer.matches, []);
+  assert.equal(off.plexServer.requests.some((request) => request.search.includes('file=')), false);
+  // Switched on again, what is waiting is seen to.
+  off.settings.setUpkeep({ enabled: true, stuckHours: 6, fixMatches: true });
+  await off.look();
+  assert.equal(off.plexServer.matches.length, 1);
+});
+
 const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
 const say = (content) => ({ role: 'assistant', content });
 const outputs = (messages) => messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
@@ -545,6 +879,61 @@ test('with nothing left to fetch, or Plex out of reach, find_show says so and ca
     assert.equal(unreachable.trace().added.length, 1);
   } finally {
     unreachable.close();
+  }
+});
+
+test('from the request to Plex: what the catalogue named is what Plex is held to', async () => {
+  const planId = (messages) => outputs(messages).findLast((output) => output.plan).plan.id;
+  const firstId = (messages) => outputs(messages).findLast((output) => output.results).results[0].id;
+  // The numbers the stand-in catalogue gives its shows and films.
+  const british = `tt${9000000 + WORLD.shows.findIndex((show) => show.id === 106)}`;
+  const american = `tt${9000000 + WORLD.shows.findIndex((show) => show.id === 105)}`;
+  const charade = `tt${8000000 + WORLD.films.findIndex((film) => film.title === 'Charade' && film.date)}`;
+  const knows = [
+    { imdb: british, kind: 'show', title: 'Kestrelmere', year: 2001 },
+    { imdb: american, kind: 'show', title: 'Kestrelmere (US)', year: 2005 },
+    { imdb: charade, kind: 'movie', title: 'Charade', year: 1963 },
+  ];
+  const world = createWorld({ catalogue: true, plex: { knows } }, () =>
+    scripted([
+      () => call('find_show', { title: 'Kestrelmere 2001' }),
+      (messages) => call('download', { result_id: planId(messages), library: 'TV', title: 'Kestrelmere' }),
+      () => say('I found all of the British Kestrelmere and saved it in TV.'),
+      () => call('search_media', { query: 'Charade 1963', media_type: 'movie' }),
+      (messages) => call('download', { result_id: firstId(messages), library: 'Movies' }),
+      () => say('I picked a copy of Charade (1963) and saved it in Movies.'),
+      () => say('Welcome back! Both have finished, and Plex has them as what they are now.'),
+    ]),
+  );
+  try {
+    await world.say('Can you get the British Kestrelmere? All of it.');
+    await world.say('And Charade from 1963, please.');
+    const [show, film] = world.trace().added;
+    assert.deepEqual([show.title, film.title], ['Kestrelmere.UK.The.Complete.Series.S01-S02.1080p.BluRay.x264-GRP', 'Charade.1963.1080p.BluRay.x264-GRP']);
+
+    world.finish();
+    await world.upkeep.look();
+    // Plex takes the show for its better-known namesake, and the film for nothing at all.
+    const inPlex = (download) => `${download.savePath.replace('/media/', '/data/')}/${download.title}`;
+    const showId = world.plexServer.add('2', { title: 'Kestrelmere (US)', year: 2005, imdb: american, files: [`${inPlex(show)}/Kestrelmere.UK.S01E01.mkv`] });
+    const filmId = world.plexServer.add('1', { title: 'Charade', unmatched: true, files: [`${inPlex(film)}/Charade.mkv`] });
+    for (let looks = 0; looks < 3; looks++) await world.upkeep.look();
+    assert.deepEqual(world.plexServer.matches, [
+      { id: showId, imdb: british, name: 'Kestrelmere', year: '2001' },
+      { id: filmId, imdb: charade, name: 'Charade', year: '1963' },
+    ]);
+
+    // Whoever asked hears of it when they are next there.
+    const back = await world.comeBack();
+    assert.deepEqual(back.statuses.filter((status) => status.startsWith('Plex')), [
+      'Plex had filed “Kestrelmere” (2001) as “Kestrelmere (US)” (2005). That has been corrected.',
+      'Plex did not recognise “Charade” (1963). It has been told which film it is.',
+    ]);
+    // The model had no part in any of it, and was told nothing of numbers or of where Plex is.
+    const everything = JSON.stringify(world.trace());
+    assert.equal([british, charade, PLEX_TOKEN, 'plex.invalid', '/data/'].some((text) => everything.includes(text)), false);
+  } finally {
+    world.close();
   }
 });
 

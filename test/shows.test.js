@@ -9,6 +9,7 @@ const { sayDate } = await import('../src/catalogue.js');
 const { guideOf, heldAgainst, numbered, showLine } = await import('../src/lookups.js');
 const { buildPlan, lastAired, matchShow, parseRelease, planShow } = await import('../src/releases.js');
 const { talkTo } = await import('../bench/world.js');
+const { corpusOf, release: listing } = await import('../bench/corpus.js');
 
 const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
 const show = (args) => call('find_show', args);
@@ -344,5 +345,277 @@ test('without the catalogue, or when it cannot be reached, a request for a show 
   } finally {
     without.close();
     lost.close();
+  }
+});
+
+// ---- Shows and release names of the kinds real ones are ---------------------------
+
+const TV = [5000, 5040];
+/** A PiRick whose catalogue knows `shows` and whose indexer has `copies` ([name, seeders, GB]), `most` of them to a search. */
+const world = (shows, copies, most = 50, more = {}) =>
+  talkTo({ catalogue: { shows }, ...more }, { corpus: corpusOf(copies.map(([name, seeders = 100, size = 5]) => listing(name, seeders, size, TV)), { most }) });
+const seasons = (count, episodes = 10) => Object.fromEntries(Array.from({ length: count }, (unused, i) => [i + 1, episodes]));
+
+test('the lesser known of two shows with one name is not given the copies of the other', async () => {
+  const american = { id: 1, name: 'Harbour Watch', year: 2005, weight: 90, country: 'US', seasons: seasons(9, 22) };
+  const british = { id: 2, name: 'Harbour Watch', year: 2001, weight: 70, country: 'GB', seasons: seasons(2, 6) };
+  const copies = [
+    ['Harbour Watch (US) (2005) Complete Series S01-S09 1080p BluRay x265', 1600, 160],
+    ['Harbour.Watch.US.S01-S09.COMPLETE.1080p.BluRay.x264-GRP', 1100, 310],
+    ['Harbour.Watch.2005.S01.1080p.BluRay.x265-GRP', 900, 20],
+    ['Harbour.Watch.S03E05.720p.HDTV.x264-GRP', 400, 0.4],
+    ['Harbour.Watch.UK.S01.720p.BluRay.x264-GRP', 210, 5],
+    ['Harbour.Watch.UK.S02.720p.BluRay.x264-GRP', 200, 5],
+  ];
+  // The indexer gives three results to a search, so under the bare name the American show is all there is to see.
+  const chat = world([american, british], copies, 3);
+  try {
+    const uk = await chat.say('Get the British Harbour Watch', [show({ title: 'Harbour Watch UK' }), get('TV', 'Harbour Watch')], 'Done.');
+    assert.equal(uk.outputs[0].catalogue, 'This is Harbour Watch (2001, United Kingdom, 2 seasons).');
+    assert.deepEqual(titles(chat), ['Harbour.Watch.UK.S01.720p.BluRay.x264-GRP', 'Harbour.Watch.UK.S02.720p.BluRay.x264-GRP'], 'not the pack of nine seasons, which is the other show');
+    // Under the bare name, and by the year and the country that release names tell the two apart with.
+    assert.deepEqual(chat.world.trace().searches.slice(0, 3), ['Harbour Watch', 'Harbour Watch 2001', 'Harbour Watch UK']);
+
+    // The better known is found under the name alone, in brackets or not.
+    const before = chat.world.trace().searches.length;
+    await chat.say('And the American one', [show({ title: 'Harbour Watch 2005' }), get('TV', 'Harbour Watch')], 'Done.');
+    assert.equal(titles(chat).at(-1), 'Harbour Watch (US) (2005) Complete Series S01-S09 1080p BluRay x265');
+    assert.deepEqual(chat.world.trace().searches.slice(before), ['Harbour Watch']);
+  } finally {
+    chat.close();
+  }
+});
+
+test('two shows with one name are not saved into one folder, and a show goes where Plex keeps it', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Watch', year: 2005, weight: 90, country: 'US', seasons: seasons(2, 6) },
+    { id: 2, name: 'Harbour Watch', year: 2001, weight: 70, country: 'GB', seasons: seasons(2, 6) },
+  ];
+  const copies = [
+    ['Harbour.Watch.US.S01.1080p.BluRay.x265-GRP', 900, 20],
+    ['Harbour.Watch.US.S02.1080p.BluRay.x265-GRP', 900, 20],
+    ['Harbour.Watch.UK.S01.720p.BluRay.x264-GRP', 210, 5],
+  ];
+  const saved = (chat) => chat.world.trace().added.map((entry) => entry.savePath);
+  const american = [show({ title: 'Harbour Watch 2005', season: 2 }), get('TV', 'Harbour Watch')];
+  const british = [show({ title: 'Harbour Watch UK', season: 1 }), get('TV', 'Harbour Watch')];
+
+  // With nothing on disk, each gets a folder with its year in the name, as Plex writes them.
+  const empty = world(shows, copies);
+  // A folder that says which of the two it is, is that one's. One with only the name they share could be either's.
+  const kept = world(shows, copies, 50, { folders: { '/media/TV': ['Harbour Watch', 'Harbour Watch (US)'] } });
+  // Plex files the American one with its country, in a folder called something else again.
+  const inPlex = world(shows, copies, 50, { plex: { shows: [{ title: 'Harbour Watch (US)', year: 2005, seasons: { 1: 6 }, folder: 'HW American' }] }, folders: { '/media/TV': ['HW American', 'Harbour Watch'] } });
+  try {
+    const first = await empty.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    await empty.say('And season 1 of the British one', british, 'Done.');
+    assert.deepEqual(saved(empty), ['/media/TV/Harbour Watch (2005)', '/media/TV/Harbour Watch (2001)']);
+    assert.match(first.record.statuses.at(-1), /→ TV \/ Harbour Watch \(2005\) \(new folder\)$/);
+
+    await kept.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    await kept.say('And season 1 of the British one', british, 'Done.');
+    assert.deepEqual(saved(kept), ['/media/TV/Harbour Watch (US)', '/media/TV/Harbour Watch (2001)']);
+
+    const known = await inPlex.say('Season 2 of the American Harbour Watch', american, 'Done.');
+    assert.equal(known.outputs[0].plex, 'Plex has none of season 2.', 'so Plex knows the show, under the name it files it by');
+    assert.deepEqual(saved(inPlex), ['/media/TV/HW American']);
+    const have = await inPlex.say('And season 1 of it', [show({ title: 'Harbour Watch 2005', season: 1 })], 'You already have it.');
+    assert.equal(have.outputs[0].plex, 'Plex already has all 6 episodes of season 1 of Harbour Watch (US).');
+  } finally {
+    empty.close();
+    kept.close();
+    inPlex.close();
+  }
+});
+
+test('a copy that gives its show another year is of another show, and a miniseries is all of a show with one season', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Lights', year: 2024, weight: 95, country: 'US', seasons: { 1: 10 } },
+    { id: 2, name: 'Harbour Lights', year: 1980, weight: 60, country: 'US', seasons: { 1: 5 } },
+  ];
+  const chat = world(shows, [
+    ['Harbour.Lights.2024.S01.1080p.BluRay.x265-GRP', 1300, 18],
+    ['Harbour Lights (2024) Season 1 S01 (1080p BluRay x265)', 600, 21],
+    ['Harbour.Lights.1980.Miniseries.1080p.BluRay.x264-GRP', 180, 44],
+  ]);
+  try {
+    const old = await chat.say('Get the old Harbour Lights', [show({ title: 'Harbour Lights 1980' }), get('TV', 'Harbour Lights')], 'Done.');
+    assert.deepEqual(titles(chat), ['Harbour.Lights.1980.Miniseries.1080p.BluRay.x264-GRP']);
+    assert.deepEqual(old.record.statuses.slice(0, 1), ['Found “Harbour Lights”: the complete series in one pack (44.0 GB)']);
+    // A year apart is the same show: release names date some by their first showing somewhere else.
+    await chat.say('And the new one', [show({ title: 'Harbour Lights 2023' }), get('TV', 'Harbour Lights')], 'Done.');
+    assert.equal(titles(chat).at(-1), 'Harbour.Lights.2024.S01.1080p.BluRay.x265-GRP');
+  } finally {
+    chat.close();
+  }
+});
+
+test('a piece of a season is not the season, and two episodes in one file are both of them', async () => {
+  const chat = world(
+    [{ id: 1, name: 'Saltmarsh Row', year: 2020, weight: 80, country: 'US', seasons: seasons(2, 9) }],
+    [
+      ['Saltmarsh.Row.S02.Vol.1.1080p.WEB-DL.x264-GRP', 900, 21],
+      ['Saltmarsh.Row.S02.Vol.2.1080p.WEB-DL.x264-GRP', 800, 9],
+      ['Saltmarsh.Row.S02E01-E07.1080p.WEB-DL.x264-GRP', 700, 20],
+      ['Saltmarsh.Row.S02.720p.BluRay.x264-GRP', 50, 9],
+      ['Saltmarsh.Row.S01E01E02.1080p.WEB-DL.x264-GRP', 300, 3],
+    ],
+  );
+  try {
+    await chat.say('Get season 2 of Saltmarsh Row', [show({ title: 'Saltmarsh Row', season: 2 }), get('TV', 'Saltmarsh Row')], 'Done.');
+    assert.deepEqual(titles(chat), ['Saltmarsh.Row.S02.720p.BluRay.x264-GRP'], 'not half of it, however many have that half');
+
+    // The second episode exists only in a file with the first, which a search for it by itself does not find.
+    const second = await chat.say('And episode 2 of season 1', [show({ title: 'Saltmarsh Row', season: 1, episode: 2 })], 'Shall I get it?');
+    assert.deepEqual(second.record.statuses, ['Found season 1 episode 2 of “Saltmarsh Row”: Saltmarsh.Row.S01E01E02.1080p.WEB-DL.x264-GRP (3.0 GB)']);
+    assert.deepEqual(chat.world.trace().searches.slice(-2), ['Saltmarsh Row S01E02', 'Saltmarsh Row S01']);
+  } finally {
+    chat.close();
+  }
+});
+
+test('a show of more than thirty seasons is planned to its last, and a season with one season to its name is all of it', async () => {
+  const long = { id: 1, name: 'Evergreen Lane', year: 1989, weight: 90, country: 'US', seasons: seasons(34) };
+  const short = { id: 2, name: 'Ashfall', year: 2019, weight: 90, country: 'US', seasons: { 1: 5 } };
+  const pad = (number) => String(number).padStart(2, '0');
+  const chat = world(
+    [long, short],
+    [
+      ...Array.from({ length: 34 }, (unused, i) => [`Evergreen.Lane.S${pad(i + 1)}.1080p.WEB-DL.x264-GRP`, 300 - i, 18]),
+      ['Ashfall.2019.COMPLETE.MINISERIES.720p.BluRay.x264-GRP', 700, 6.5],
+      ['Ashfall.2019.S01.1080p.BluRay.x264-GRP', 400, 28],
+    ],
+  );
+  try {
+    const all = await chat.say('Get all of Evergreen Lane', [show({ title: 'Evergreen Lane' })], 'It is 34 downloads. Shall I?');
+    assert.equal(all.outputs[0].plan.gets.length, 34);
+    assert.equal(all.outputs[0].plan.gets.at(-1).what, 'Season 34');
+
+    // The pack in the quality wanted, whichever of the two calls itself complete. One search is enough to know.
+    const before = chat.world.trace().searches.length;
+    const mini = await chat.say('And Ashfall', [show({ title: 'Ashfall' }), get('TV', 'Ashfall')], 'Done.');
+    assert.deepEqual(titles(chat), ['Ashfall.2019.S01.1080p.BluRay.x264-GRP']);
+    assert.deepEqual(mini.outputs[0].plan.gets.map((part) => part.what), ['Season 1']);
+    assert.deepEqual(chat.world.trace().searches.slice(before), ['Ashfall']);
+  } finally {
+    chat.close();
+  }
+});
+
+test('searches are not spent on what a show is called abroad, on other ways to write a season, or on letters no release has', async () => {
+  const shows = [
+    { id: 1, name: 'Saltmarsh Row', akas: ['The Row'], abroad: [{ name: 'Соляное болото', country: 'RU' }, { name: 'Sosmocsar', country: 'HU' }], year: 2020, weight: 80, seasons: { 1: 9, 2: 9 }, status: 'Running' },
+    { id: 2, name: 'Señora Marisol', year: 2021, weight: 70, country: 'ES', seasons: { 1: 8 } },
+  ];
+  const chat = world(shows, [['Senora.Marisol.S01.1080p.WEB-DL.x264-GRP', 300, 12], ['Saltmarsh.Row.S02E01.1080p.WEB.x264-GRP', 90, 1.5]]);
+  try {
+    // Nothing of it anywhere: looked for under its name and the other it goes by everywhere, and no more.
+    const none = await chat.say('Get episode 4 of season 1 of Saltmarsh Row', [show({ title: 'Saltmarsh Row', season: 1, episode: 4 })], 'I could not find it.');
+    assert.equal(none.outputs[0].found, false);
+    assert.deepEqual(chat.world.trace().searches, ['Saltmarsh Row S01E04', 'Saltmarsh Row S01', 'The Row S01E04', 'The Row S01']);
+
+    // A season with no pack: "season 2" is tried, but not "season two" or "season II".
+    let before = chat.world.trace().searches.length;
+    await chat.say('Season 2 then', [show({ title: 'Saltmarsh Row', season: 2 })], 'One episode so far. Shall I?');
+    assert.deepEqual(chat.world.trace().searches.slice(before), ['Saltmarsh Row S02', 'Saltmarsh Row season 2']);
+
+    // The latest season of a show still running has all the episodes that are listed for it.
+    const beyond = await chat.say('And episode 14 of it', [show({ title: 'Saltmarsh Row', season: 2, episode: 14 })], 'It has nine.');
+    assert.equal(beyond.outputs[0].catalogue, 'This is Saltmarsh Row (2020, 2 seasons, still running). Season 2 of Saltmarsh Row has 9 episodes so far. There is no episode 14.');
+
+    // Release names are written in plain letters.
+    before = chat.world.trace().searches.length;
+    await chat.say('Get Señora Marisol', [show({ title: 'Señora Marisol' }), get('TV', 'Señora Marisol')], 'Done.');
+    assert.deepEqual(chat.world.trace().searches.slice(before), ['Senora Marisol']);
+    assert.deepEqual(titles(chat), ['Senora.Marisol.S01.1080p.WEB-DL.x264-GRP']);
+  } finally {
+    chat.close();
+  }
+});
+
+test('a season only one of several same-named shows has settles which is meant, and a name may end in a year', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Watch', year: 2005, weight: 90, country: 'US', seasons: seasons(9, 22) },
+    { id: 2, name: 'Harbour Watch', year: 2001, weight: 70, country: 'GB', seasons: seasons(2, 6) },
+    { id: 3, name: 'Harbour', year: 2010, weight: 60, country: 'US', seasons: seasons(1) },
+    { id: 4, name: 'Harbour 1900', year: 2015, weight: 40, country: 'GB', seasons: seasons(1, 6) },
+  ];
+  const chat = world(shows, [['Harbour.Watch.US.S03.1080p.BluRay.x265-GRP', 900, 20], ['Harbour.1900.S01.1080p.WEB-DL.x264-GRP', 80, 9]]);
+  try {
+    // Only the American one got as far as a third season, so there is nothing to ask.
+    const third = await chat.say('Get season 3 of Harbour Watch', [show({ title: 'Harbour Watch', season: 3 }), get('TV', 'Harbour Watch')], 'Done.');
+    assert.equal(third.outputs[0].catalogue, 'This is Harbour Watch (2005, United States, 9 seasons). One other show has the same name, and it has no season 3.');
+    assert.equal(third.record.statuses[0], 'Took “Harbour Watch” to be Harbour Watch (2005), the only show of that name with a season 3');
+    assert.deepEqual(titles(chat), ['Harbour.Watch.US.S03.1080p.BluRay.x265-GRP']);
+    // Both have a first season, so that is still asked.
+    const first = await chat.say('And season 1', [show({ title: 'Harbour Watch', season: 1 })], 'The American or the British one?');
+    assert.equal(first.outputs[0].which_one.length, 2);
+
+    // "1900" reads as a year, and no show called Harbour began then: the whole of it is a show's name.
+    const dated = await chat.say('Get Harbour 1900', [show({ title: 'Harbour 1900' }), get('TV', 'Harbour 1900')], 'Done.');
+    assert.equal(dated.outputs[0].catalogue, 'This is Harbour 1900 (2015, United Kingdom, 1 season).');
+    assert.equal(titles(chat).at(-1), 'Harbour.1900.S01.1080p.WEB-DL.x264-GRP');
+  } finally {
+    chat.close();
+  }
+});
+
+test('the latest season can be asked for by episode, and nothing found under the name ends the looking', async () => {
+  const chat = pirick();
+  const nowhere = world([{ id: 1, name: 'Evergreen Lane', year: 1989, weight: 90, country: 'US', seasons: seasons(12) }], []);
+  try {
+    // Tales of the Kestrel is in its third season, of which three episodes have been shown.
+    const due = await chat.say('Get episode 4 of the new season of Tales of the Kestrel', [show({ title: 'Tales of the Kestrel', latest: true, episode: 4 })], 'It is not out yet.');
+    assert.match(due.outputs[0].catalogue, /Only 3 episodes of season 3 of Tales of the Kestrel have aired so far\. It is due on /);
+    assert.deepEqual(chat.world.trace().searches, [], 'nothing was looked for');
+    const shown = await chat.say('Then episode 2 of it', [show({ title: 'Tales of the Kestrel', latest: true, episode: 2 })], 'Shall I get it?');
+    assert.match(shown.record.statuses.at(-1), /^Found season 3 episode 2 of “Tales of the Kestrel”: /);
+
+    // Twelve seasons, and not one copy of any of it: one search says so. It used to take fourteen.
+    const none = await nowhere.say('Get all of Evergreen Lane', [show({ title: 'Evergreen Lane' })], 'I could not find it.');
+    assert.equal(none.outputs[0].found, false);
+    assert.deepEqual(nowhere.world.trace().searches, ['Evergreen Lane']);
+  } finally {
+    chat.close();
+    nowhere.close();
+  }
+});
+
+test('a show whose copies are numbered straight through is not planned by seasons, nor a piece of it taken for all', async () => {
+  // Three hundred episodes, which the catalogue files in seven seasons and release names number from 1 to 300.
+  const long = { id: 1, name: 'Long Voyage', year: 1999, weight: 90, country: 'JP', type: 'Animation', language: 'Japanese', seasons: { 1: 8, 2: 44, 3: 48, 4: 50, 5: 50, 6: 50, 7: 50 } };
+  const ANIME = [5000, 5070];
+  const copies = (names) => corpusOf(names.map(([name, seeders = 100, size = 5]) => listing(name, seeders, size, ANIME)));
+  const pieces = talkTo({ catalogue: { shows: [long] } }, { corpus: copies([['[Subs] Long Voyage - 001-061 [BD 1080p] (First Saga)', 800, 48], ['[Subs] Long Voyage - 062-135 [BD 1080p]', 500, 57], ['[Subs] Long Voyage - 299 [1080p]', 300, 1.4], ['[Subs] Long Voyage - 300 [1080p]', 320, 1.4]]) });
+  const whole = talkTo({ catalogue: { shows: [long] } }, { corpus: copies([['[Subs] Long Voyage - 001-061 [BD 1080p] (First Saga)', 800, 48], ['[Subs] Long Voyage - 001-300 [BD 1080p]', 90, 280]]) });
+  try {
+    const none = await pieces.say('Get Long Voyage', [show({ title: 'Long Voyage' })], 'It is too long to fetch whole. Which episodes?');
+    assert.equal(none.outputs[0].found, false);
+    assert.equal(none.outputs[0].releases, 'Copies of Long Voyage are numbered straight through its 300 episodes, not by season, and no pack was found that holds all of them.');
+    assert.match(none.outputs[0].note, /ask which episodes they are after/);
+    assert.equal(none.record.statuses.at(-1), 'Looked for “Long Voyage”: its 300 episodes are numbered straight through, and nothing holds all of them');
+    assert.equal(none.record.nudges, 0, 'saying so is a complete answer');
+    // One episode is asked for by its number in the whole show.
+    const one = await pieces.say('Episode 299 then', [show({ title: 'Long Voyage', episode: 299 }), get('Anime', 'Long Voyage')], 'Done.');
+    assert.deepEqual(titles(pieces), ['[Subs] Long Voyage - 299 [1080p]']);
+    assert.equal(one.record.nudges, 0);
+
+    // A pack that runs from the first episode to the last is all of it, and the first sixty-one are not.
+    await whole.say('Get Long Voyage', [show({ title: 'Long Voyage' }), get('Anime', 'Long Voyage')], 'Done.');
+    assert.deepEqual(titles(whole), ['[Subs] Long Voyage - 001-300 [BD 1080p]']);
+  } finally {
+    pieces.close();
+    whole.close();
+  }
+});
+
+test('an episode of an anime is looked for the way fansub releases number it', async () => {
+  const chat = pirick();
+  try {
+    const second = await chat.say('Get episode 2 of Starfall Courier', [show({ title: 'Starfall Courier', season: 1, episode: 2 })], 'Shall I get it?');
+    assert.deepEqual(chat.world.trace().searches, ['Starfall Courier S01E02', 'Starfall Courier 02']);
+    assert.match(second.record.statuses.at(-1), /^Found season 1 episode 2 of “Starfall Courier”: \[Subs\] Starfall Courier - 02 /);
+  } finally {
+    chat.close();
   }
 });

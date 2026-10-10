@@ -4,6 +4,7 @@ import { countryName, sayDate, standing } from './catalogue.js';
 
 /** More seasons than this and the numbering is taken to be by year or by episode, which no plan can follow. */
 const MAX_GUIDE_SEASONS = 60;
+const MAX_PLEX_LOOKUPS = 4;
 const ABOUT_IN_A_LIST = 160;
 
 export const listOf = (items) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : String(items[0]));
@@ -69,6 +70,16 @@ export function showLine(show, { about = false } = {}) {
  * anime, whose releases are seldom numbered the way a guide numbers them, or a
  * show whose seasons are numbered by year.
  */
+/** The films whose names begin with the one asked for, as the model is given them: with the year, and a word on any that is not out. */
+export const alikeLines = (alike) => (alike ?? []).map((film) => `${titled(film)}${standing(film) === 'due' ? ', not out yet' : ''}`);
+
+// Release names, folders and Plex tell two shows of one name apart by a country after it.
+const COUNTRY_TAGS = { US: ['US', 'USA'], GB: ['UK', 'GB'] };
+/** A show's name with its country after it, each way that is written: "Kestrelmere US". */
+export const taggedNames = (show) => show.countries.flatMap((code) => COUNTRY_TAGS[code] ?? [code]).map((tag) => `${show.title} ${tag}`);
+/** The names to ask Plex for a show by, likeliest first. Plex files one of several shows of a name as "Kestrelmere (US)". */
+export const plexNames = (show) => [...new Set([show.title, ...taggedNames(show), ...show.names])].slice(0, MAX_PLEX_LOOKUPS);
+
 export function guideOf(show) {
   const seasons = show?.seasons ?? [];
   if (!seasons.length || show.anime || seasons.some((season) => season.number > MAX_GUIDE_SEASONS)) return null;
@@ -223,6 +234,7 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
           found: false,
           catalogue: `More than one ${sort} is called ${named}.`,
           which_one: found.several.map(line),
+          ...(found.alike && { names_that_begin_the_same: alikeLines(found.alike) }),
           note: 'Nothing more was looked up. If what the user said settles which of these they mean, call the same tool again with that title and its year. Otherwise ask the user which one.',
         },
       };
@@ -231,10 +243,10 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
     let note = '';
     if (found.wrongYear) note = `No ${sort} called ${named} is from ${about.year}; this is the one of that name.`;
     else if (found.inexact) note = `Nothing is called ${named}; this is the nearest.`;
-    return { thing, note };
+    return { thing, note, alike: found.alike };
   }
 
-  async function aboutFilm(user, turn, film, note) {
+  async function aboutFilm(user, turn, film, note, alike) {
     const [about, series, held] = await Promise.all([
       askCatalogue(() => catalogue.about(film)),
       askCatalogue(() => catalogue.seriesOf(film)),
@@ -265,6 +277,7 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
       original_title: film.originalTitle,
       // The films of its series in the order they came out, or failing that what it is known to follow.
       series: series?.films.map(titled),
+      names_that_begin_the_same: alikeLines(alike),
       order: series ? '' : neighbours(film),
       plex: held === undefined ? '' : held ? `Plex already has ${titled(held)}.` : 'Plex does not have it.',
       note: `${ONLY_LOOKED} If the user wants it fetched, call search_media with this title and year.`,
@@ -274,7 +287,7 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
   async function aboutShow(user, turn, show, note) {
     const guide = new Map(show.seasons.map((season) => [season.number, season]));
     const held = await askPlex(async () => {
-      for (const name of show.names.slice(0, 4)) {
+      for (const name of plexNames(show)) {
         const under = await plex.show(name, show.year);
         if (under) return under;
       }
@@ -298,8 +311,8 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
       with: show.cast,
       genres: show.genres,
       anime: show.anime ? 'It is anime.' : '',
-      // Its names in other alphabets say nothing to someone reading this one.
-      other_names: show.names.filter((name) => name !== show.title && /^[\p{Script=Latin}\p{N}\p{P}\p{Zs}]+$/u.test(name)).slice(0, 3),
+      // The names it has where it was made. What it is called abroad, or in another alphabet, says nothing to someone asking in this one.
+      other_names: show.ownNames.filter((name) => name !== show.title).slice(0, 3),
       plex: held === undefined ? '' : held?.seasons.size ? `Plex already has ${heldAgainst(held.seasons, show.anime ? new Map() : guide)}.` : 'Plex has none of it.',
       note: `${ONLY_LOOKED} If the user wants it fetched, call find_show with this title.`,
     });
@@ -311,10 +324,10 @@ export function createLookups({ catalogue, plex, askCatalogue, askPlex, tell, ge
       if (!asked) return { error: 'A title is required.' };
       turn.looked = true;
       turn.emit({ type: 'working', text: `Looking up “${asked}”…` });
-      const { thing, note, reply } = await identify(asked, ['film', 'show'].includes(args.kind) ? args.kind : null, turn);
+      const { thing, note, alike, reply } = await identify(asked, ['film', 'show'].includes(args.kind) ? args.kind : null, turn);
       if (reply) return reply;
       turn.status(`Looked up ${titled(thing)}`, 'search');
-      return thing.kind === 'show' ? aboutShow(user, turn, thing, note) : aboutFilm(user, turn, thing, note);
+      return thing.kind === 'show' ? aboutShow(user, turn, thing, note) : aboutFilm(user, turn, thing, note, alike);
     },
 
     async look_up_person(user, args, turn) {

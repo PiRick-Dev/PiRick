@@ -33,13 +33,18 @@ export function canonicalWords(text) {
     .map(canonicalWord);
 }
 
+/** The same words in plain letters: "Señora Marisol" as "Senora Marisol", which is how release names write it. */
+export const unaccented = (text) => String(text ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').normalize('NFC');
+
 /**
  * Other spellings worth searching for, since indexers match release names
  * literally: "7 Chances" is released as "Seven.Chances", "Part 2" as "Part.II".
  */
 export function queryVariants(query) {
   const words = String(query ?? '').split(/\s+/).filter(Boolean);
-  const rewrite = (change) => words.map((word, i) => (isMarker(word) ? word : change(word, i) ?? word)).join(' ');
+  // The number of a season is not part of a title: "Season 2" is not released as "Season Two".
+  const fixed = (word, i) => isMarker(word) || (i > 0 && /^seasons?$/i.test(words[i - 1]));
+  const rewrite = (change) => words.map((word, i) => (fixed(word, i) ? word : change(word, i) ?? word)).join(' ');
   const digits = (word) => (/^\d{1,4}$/.test(word) ? Number(word) : null);
   const variants = [
     // Digits as words, and words as digits.
@@ -48,7 +53,7 @@ export function queryVariants(query) {
     rewrite((word) => (word === '&' ? 'and' : null)),
   ];
   // A sequel number: "Part 2" is as likely to be "Part II". Only for one number that is not the first word.
-  const titleWords = words.filter((word) => !isMarker(word));
+  const titleWords = words.filter((word, i) => !fixed(word, i));
   const numbers = titleWords.filter((word) => digits(word) != null);
   if (numbers.length === 1 && titleWords[0] !== numbers[0]) variants.push(rewrite((word) => (digits(word) != null ? romanForNumber(digits(word)) : null)));
 
@@ -166,8 +171,20 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
      *
      * `filter: false` skips the relevance check, for callers that do their own.
      * `onTry(spelling)` is called before each search, to show progress.
+     * `title` is the part at the start of the query that is a title, when the
+     * caller knows: other spellings are then tried of that part only, and what
+     * follows it ("S02", "05") is left as it is. `asWritten` tries no other
+     * spellings at all, for a caller that is already working through names.
+     *
+     * Release names are written in plain letters, and not every indexer takes
+     * "é" for "e". So a query with accents is searched for without them, and as
+     * it was written only if that finds nothing.
      */
-    async search(query, categories, { filter = true, onTry } = {}) {
+    async search(written, categories, { filter = true, onTry, title, asWritten = false } = {}) {
+      const query = unaccented(written);
+      const name = unaccented(title ?? '');
+      const others = (asked) => (name && asked.startsWith(name) ? queryVariants(name).map((other) => `${other}${asked.slice(name.length)}`) : queryVariants(asked));
+      const spellingsOf = (asked) => (asWritten ? [] : others(asked));
       const found = new Map();
       const wanted = mayBePrograms(categories ?? []) ? () => true : (result) => !PROGRAM.test(String(result.title).trim());
       const also = [];
@@ -180,8 +197,8 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
       };
 
       /** Tries each spelling of `asked` in turn, stopping at the first that is enough. */
-      async function tryAll(asked) {
-        for (const spelling of [asked, ...queryVariants(asked)]) {
+      async function tryAll(asked, first = []) {
+        for (const spelling of [asked, ...first, ...spellingsOf(asked)]) {
           if (spelling !== query) also.push(spelling);
           onTry?.(spelling);
           try {
@@ -201,7 +218,7 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
         return null;
       }
 
-      let results = await tryAll(query);
+      let results = await tryAll(query, written === query ? [] : [written]);
       const shorter = results ? null : withoutTrailingWords(query);
       if (shorter) results = await tryAll(shorter);
       // Only an error if nothing at all came back.

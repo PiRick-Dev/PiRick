@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { endedWithoutActing } from '../src/agent.js';
 import { hashFromMagnet, normaliseHash } from '../src/jackett.js';
 import { formatBytes, toDownload } from '../src/qbittorrent.js';
-import { differentReleasesNote, normaliseQuery } from '../src/tools.js';
+import { differentReleasesNote, filmMeant, normaliseQuery } from '../src/tools.js';
 
 test('season and episode wording is rewritten the way indexers name things', () => {
   assert.equal(normaliseQuery('Copperhollow season 2'), 'Copperhollow S02');
@@ -53,6 +53,42 @@ test('replies that claim a download which never happened are caught', () => {
   assert.equal(endedWithoutActing({ searched: true }, "I couldn't find it anywhere, sorry.", 1), false);
   // A list of options is a question even without a question mark.
   assert.equal(endedWithoutActing({ searched: true }, 'Are you looking for:\n\n1. Dr. Jekyll and Mr. Hyde (1920)\n2. Dr. Jekyll and Mr. Hyde (1913)'), false);
+
+  // A download that waits on the user's word may be left with them, as an offer or as a plain account.
+  const waiting = { searched: true, askFirst: true };
+  for (const fine of [
+    'It is a 1963 mystery set in Paris. Say the word and I will fetch it.',
+    'You have seasons 1 and 5. I found seasons 2, 3 and 4: just let me know and I will get them.',
+    'I found seasons 2, 3 and 4, 43 GB in all.',
+    'Once you say yes, I will start it.',
+  ]) {
+    assert.equal(endedWithoutActing(waiting, fine), false, fine);
+  }
+  // Saying it is about to be done is not leaving it with them: nothing will come of it. Sent back once.
+  for (const promise of [
+    "I've found the remaining seasons. Since you already have seasons 1 and 5, I'm going to start downloading seasons 2, 3, and 4. They'll show up once they're finished.",
+    "I found it. I'll go ahead and download the 1080p copy.",
+    'I will start the download now.',
+  ]) {
+    assert.equal(endedWithoutActing(waiting, promise), true, promise);
+    assert.equal(endedWithoutActing(waiting, promise, 1), false, promise);
+  }
+});
+
+test('a copy is remembered as the film the catalogue named, unless its own name says otherwise', () => {
+  const known = { title: 'Brindle', year: 1984, imdb: 'tt0001984' };
+  const meant = { kind: 'film', title: 'Brindle', year: 1984, imdb: 'tt0001984' };
+  assert.deepEqual(filmMeant(known, 'Brindle.1984.1080p.BluRay.x264-GRP'), meant);
+  // A name with no year in it is the very thing Plex has to guess at.
+  assert.deepEqual(filmMeant(known, 'Brindle.1080p.BluRay.x264-GRP'), meant);
+  assert.deepEqual(filmMeant(known, 'Brindle.1985.1080p.BluRay.x264-GRP'), meant, 'sources differ by a year');
+  // The remake, or an episode of a show of the name: not the film that was named.
+  assert.equal(filmMeant(known, 'Brindle.2021.1080p.WEB-DL.x264-GRP'), null);
+  assert.equal(filmMeant(known, 'Brindle.S01E02.1080p.WEB.H264-GRP'), null);
+  assert.equal(filmMeant(known, 'Brindle.S01.1080p.WEB.H264-GRP'), null);
+  // Nothing named a film, or the catalogue has no number for it: there is nothing to hold Plex to.
+  assert.equal(filmMeant(undefined, 'Brindle.1984.1080p.BluRay.x264-GRP'), null);
+  assert.equal(filmMeant({ title: 'Brindle', year: 1984, imdb: null }, 'Brindle.1984.1080p.BluRay.x264-GRP'), null);
 });
 
 test('info hashes are read from hex and base32 magnets', () => {

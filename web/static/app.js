@@ -773,11 +773,12 @@ $('#personality-cancel').addEventListener('click', resetPersonalityForm);
 
 const upkeepForm = $('#upkeep-form');
 const upkeepNote = $('#upkeep-note');
-const UPKEEP_TONES = { replaced: 'ok', finished: 'ok', 'gave-up': 'bad', problem: 'bad' };
+const UPKEEP_TONES = { replaced: 'ok', finished: 'ok', filed: 'ok', 'gave-up': 'bad', problem: 'bad', misfiled: 'bad' };
 
 function showUpkeep(state) {
   upkeepForm.elements.enabled.checked = state.enabled;
   upkeepForm.elements.stuckHours.value = state.stuckHours;
+  upkeepForm.elements.fixMatches.checked = state.fixMatches;
   const watching = state.watching === 1 ? '1 unfinished download' : `${state.watching} unfinished downloads`;
   $('#upkeep-summary').textContent = `Watching ${watching}; ${state.stuck} stuck right now.`;
   $('#upkeep-empty').hidden = state.log.length > 0;
@@ -804,7 +805,7 @@ async function loadUpkeep() {
 upkeepForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    const body = { enabled: upkeepForm.elements.enabled.checked, stuckHours: Number(upkeepForm.elements.stuckHours.value) };
+    const body = { enabled: upkeepForm.elements.enabled.checked, stuckHours: Number(upkeepForm.elements.stuckHours.value), fixMatches: upkeepForm.elements.fixMatches.checked };
     showUpkeep(await api('/api/admin/upkeep', { method: 'PUT', body }));
     showNote(upkeepNote, 'Saved.', false);
   } catch (err) {

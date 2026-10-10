@@ -29,6 +29,8 @@ const MAX_FILMS_OF_PERSON = 10;
 const MAX_SHOWS_OF_PERSON = 5;
 // How many people of a name are looked at for one who has made something, and how much two people may share.
 const MAX_NAMESAKES = 3;
+// How many films named after the one asked for are passed on with it.
+const MAX_ALIKE = 5;
 const MAX_TOGETHER = 8;
 const MAX_FOUND = 10;
 // Of what a search found, how many with the right name are looked at closely.
@@ -216,11 +218,19 @@ export function likeness(wanted, keys, leads = []) {
  *   { several }       up to MAX_CHOICES that nothing tells apart, best known first
  *   { none: true }    nothing is called that
  * with `wrongYear` when a year was asked for and nothing of that name is from it,
- * and `inexact` when the name is not quite the one asked for.
+ * and `inexact` when the name is not quite the one asked for. The one chosen
+ * comes with `shared` when something else has exactly its name, whatever the
+ * year or country that told them apart, and with `outshone` when one of those
+ * is at least as well known as it is.
  */
 export function pick(candidates, wanted, clearly = CLEARLY.film) {
   const scored = candidates.map((candidate) => ({ candidate, like: likeness(wanted.key, candidate.keys, candidate.leads) })).filter((entry) => entry.like > 0);
   if (!scored.length) return { none: true };
+  const chosen = (one, rest) => {
+    const namesakes = scored.filter((entry) => entry.like === 3 && entry.candidate !== one).map((entry) => entry.candidate);
+    const own = scored.find((entry) => entry.candidate === one).like === 3;
+    return { one, ...rest, ...(own && namesakes.length && { shared: true }), ...(own && namesakes.some((other) => other.known >= one.known) && { outshone: true }) };
+  };
   // A misspelling is only believed when nothing has the name as given.
   const strong = scored.filter((entry) => entry.like >= 2);
   let pool = strong.length ? strong : scored;
@@ -241,10 +251,10 @@ export function pick(candidates, wanted, clearly = CLEARLY.film) {
   const best = Math.max(...pool.map((entry) => entry.like));
   const ranked = pool.filter((entry) => entry.like === best).map((entry) => entry.candidate).sort((a, b) => b.known - a.known);
   const flags = { ...(wrongYear && { wrongYear: true }), ...(best < 3 && { inexact: true }) };
-  if (ranked.length === 1 || clearly(ranked[0], ranked[1])) return { one: ranked[0], others: ranked.length - 1, ...flags };
+  if (ranked.length === 1 || clearly(ranked[0], ranked[1])) return chosen(ranked[0], { others: ranked.length - 1, ...flags });
   // None stands out. If only one is called exactly that, and the rest merely also go by it, that one is meant.
   const outright = ranked.filter((candidate) => candidate.key === wanted.key);
-  return outright.length === 1 ? { one: outright[0], others: ranked.length - 1, ...flags } : { several: ranked.slice(0, MAX_CHOICES), ...flags };
+  return outright.length === 1 ? chosen(outright[0], { others: ranked.length - 1, ...flags }) : { several: ranked.slice(0, MAX_CHOICES), ...flags };
 }
 
 /** Splits "Kestrelmere US" into the name and the country it names, when it ends in one. */
@@ -433,6 +443,8 @@ function filmFrom(entity, names) {
     anime: kinds.some((id) => ANIME_KINDS.has(id)) || (animated && (idsOf(entity, P.country).includes(JAPAN) || idsOf(entity, P.language).includes(JAPANESE))),
     genres: named(idsOf(entity, P.genre), 3),
     page: entity.sitelinks?.enwiki?.title ?? null,
+    // The number IMDb gives it, which Plex knows it by as well.
+    imdb: textsOf(entity, P.imdb).find((id) => /^tt\d+$/.test(id)) ?? null,
     firm: true,
   };
 }
@@ -477,6 +489,10 @@ function showFound(show) {
   };
 }
 
+const LATIN_LETTERS = /^[\p{Script=Latin}\p{N}\p{P}\p{S}\p{Zs}]+$/u;
+/** Whether a name is written in the letters release names are written in. */
+export const inLatinLetters = (name) => LATIN_LETTERS.test(String(name ?? ''));
+
 /** Everything about a show, its episode guide included. */
 function showFrom(show, now) {
   const found = showFound(show);
@@ -496,6 +512,10 @@ function showFrom(show, now) {
   const inOrder = [...episodes].sort((a, b) => a.season - b.season || a.episode - b.episode);
   const status = String(show.status ?? '');
   const names = unique([found.title, ...(parts.akas ?? []).map((aka) => cleanName(aka.name))].filter(Boolean));
+  // The names a release could go by: what the show is called where it was made, or everywhere, in letters an
+  // indexer has. What it is called in other countries is for recognising it, not for finding it.
+  const own = (aka) => !aka.country?.code || found.countries.includes(String(aka.country.code).toUpperCase());
+  const ownNames = unique([found.title, ...(parts.akas ?? []).filter(own).map((aka) => cleanName(aka.name))].filter((name) => name && LATIN_LETTERS.test(name)));
   return {
     ...found,
     // 'running' is still being made, 'upcoming' has not started, 'unsure' is in between seasons with no word either way.
@@ -506,6 +526,7 @@ function showFrom(show, now) {
     creators: unique((parts.crew ?? []).filter((entry) => entry.type === 'Creator').map((entry) => cleanName(entry.person?.name)).filter(Boolean)).slice(0, 2),
     cast: unique((parts.cast ?? []).map((entry) => cleanName(entry.person?.name)).filter(Boolean)).slice(0, MAX_CAST),
     names,
+    ownNames,
     keys: keysOf(names),
     leads: leadsOf(names),
     anime: show.type === 'Animation' && show.language === 'Japanese',
@@ -709,8 +730,11 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
       for (const found of list) if (!pool.has(found.id)) pool.set(found.id, found);
     };
     const choose = async () => {
-      const named = [...pool.values()].filter((found) => likeness(wanted.key, found.keys, found.leads) > 0);
-      const unsure = named.filter((found) => !found.firm).sort((a, b) => b.known - a.known).slice(0, MAX_NAMED);
+      const like = (found) => likeness(wanted.key, found.keys, found.leads);
+      const named = [...pool.values()].filter((found) => like(found) > 0);
+      // Those with exactly the name come first, however little known: a new film that has the name of a
+      // series of well-known ones is still the one of that name.
+      const unsure = named.filter((found) => !found.firm).sort((a, b) => like(b) - like(a) || b.known - a.known).slice(0, MAX_NAMED);
       if (unsure.length) await source.firm(unsure);
       return pick(named.filter((found) => found.firm), wanted, source.clearly);
     };
@@ -738,7 +762,13 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     if (choice.none) return { none: true };
     const { one, several, ...rest } = choice;
     const full = async (found) => (await source.details(found)) ?? found;
-    return one ? { one: await full(one), ...rest } : { several: await Promise.all(several.map(full)), ...rest };
+    // Films whose names begin with the one asked for, as "Kestrel: The Return" does with "Kestrel": the rest of
+    // a series, as a rule, and where "the new one" or "the third one" is to be found. Newest first.
+    const kept = one ? [one] : several;
+    const after = [...pool.values()].filter((other) => kind === 'film' && other.firm && !kept.includes(other) && nameKey(other.title).startsWith(`${wanted.key} `) && other.leads.includes(wanted.key) && !other.keys.includes(wanted.key));
+    const alike = after.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)).slice(0, MAX_ALIKE).map((other) => ({ kind, title: other.title, year: other.year, date: other.date }));
+    const more = alike.length ? { alike } : {};
+    return one ? { one: await full(one), ...rest, ...more } : { several: await Promise.all(several.map(full)), ...rest, ...more };
   }
   const named = (kind, asked) => remembered(`find ${kind} ${nameKey(asked.title)} ${asked.year ?? ''} ${asked.country ?? ''}`, SEARCH_FRESH_MS, () => find(kind, asked));
   async function found(kind, asked) {

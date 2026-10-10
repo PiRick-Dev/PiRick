@@ -25,7 +25,9 @@ export const STARTER_PERSONALITIES = [
 ];
 // What an earlier version's one personality for everybody is called in the list.
 const EARLIER_PERSONALITY_NAME = 'House voice';
-export const UPKEEP_DEFAULTS = { enabled: true, stuckHours: 6 };
+// `enabled` is whether stuck downloads are replaced, and `fixMatches` whether Plex is told
+// what a download is when it took it for something else.
+export const UPKEEP_DEFAULTS = { enabled: true, stuckHours: 6, fixMatches: true };
 const STUCK_HOURS_MAX = 168;
 const DESCRIPTION_MAX = 200;
 const PATH_MAX = 500;
@@ -66,7 +68,10 @@ export function parseUpkeep(input) {
   if (typeof input?.enabled !== 'boolean' || !Number.isInteger(stuckHours) || stuckHours < 1 || stuckHours > STUCK_HOURS_MAX) {
     return { error: `Choose a whole number of hours between 1 and ${STUCK_HOURS_MAX}.` };
   }
-  return { upkeep: { enabled: input.enabled, stuckHours } };
+  // Left out by whoever does not know of it, it stays as PiRick comes: on.
+  const fixMatches = input.fixMatches ?? UPKEEP_DEFAULTS.fixMatches;
+  if (typeof fixMatches !== 'boolean') return { error: 'Correcting matches in Plex is either on or off.' };
+  return { upkeep: { enabled: input.enabled, stuckHours, fixMatches } };
 }
 
 /**

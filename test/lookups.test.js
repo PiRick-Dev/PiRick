@@ -132,6 +132,22 @@ test('"do we have it?" is answered from Plex without a search, and having been t
   }
 });
 
+test('a show Plex files with its country after the name is still found there, and what it is called abroad is left out', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Watch', abroad: [{ name: 'Hafenwache', country: 'DE' }, { name: 'Kikotoor', country: 'HU' }], akas: ['The Watch'], year: 2005, weight: 90, country: 'US', seasons: { 1: 6, 2: 22 } },
+    { id: 2, name: 'Harbour Watch', year: 2001, weight: 40, country: 'GB', seasons: { 1: 6 } },
+  ];
+  const chat = talkTo({ catalogue: { shows }, plex: { shows: [{ title: 'Harbour Watch (US)', year: 2005, seasons: { 1: 6 } }] } });
+  try {
+    const have = await chat.say('Do we have the American Harbour Watch?', [lookUp('Harbour Watch US', 'show')], 'Season 1 of it.');
+    assert.equal(have.outputs[0].plex, 'Plex already has all of season 1.');
+    // The names it has at home, and none of those it has elsewhere.
+    assert.deepEqual(have.outputs[0].other_names, ['The Watch']);
+  } finally {
+    chat.close();
+  }
+});
+
 test('a person is looked up with what they are known for', async () => {
   const chat = pirick({ plex: { films: [{ title: 'Seven Chances', year: 1925 }] } });
   try {

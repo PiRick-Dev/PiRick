@@ -1,8 +1,9 @@
 // Looks after downloads once they have been started: notices the ones that have
 // stopped making progress and replaces them with another copy, and notices the
 // ones that finish, so Plex can be asked to pick them up and whoever asked can
-// be told. Runs unattended, so everything here follows fixed rules; no language
-// model is involved.
+// be told. It then sees that Plex took each for the film or show it was fetched
+// as, and tells it when it did not. Runs unattended, so everything here follows
+// fixed rules; no language model is involved.
 import { describeError } from './errors.js';
 import { joinPath, pathBelow, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
@@ -42,6 +43,19 @@ const SETTLING = new Set(['moving', 'checkingUP', 'checkingResumeData']);
 // What a tracked download is marked as once it has finished: 'scanning' while
 // Plex still has to be told, then 'in-plex', or 'finished' when Plex has no part in it.
 const FINISHED = new Set(['scanning', 'in-plex', 'finished']);
+// How far the check has got that Plex took a download for what it was fetched
+// as: '' while it has not been found in Plex yet, 'asked' once Plex has been
+// told what it is and the change is still to be seen, and then one of these.
+// 'left' covers all that PiRick will not touch or cannot tell.
+const FILED_FOR_GOOD = new Set(['right', 'corrected', 'left', 'unseen']);
+// Looking for one download in Plex is a request or two, so a great many at once take turns.
+const MAX_FILED_CHECKS = 20;
+// Plex is asked to scan the moment a download finishes, and is given this many looks, a minute apart, to show it.
+const MAX_FILED_LOOKS = 30;
+// A correction shows within seconds when Plex takes it.
+const MAX_CONFIRM_LOOKS = 3;
+// What Plex calls the kinds of thing PiRick fetches.
+const PLEX_KINDS = { film: 'movie', show: 'show' };
 const LOOSE_FILE = /\.(?:mkv|mp4|m4v|avi|mov|wmv|mpg|mpeg|ts|m2ts|webm|flac|mp3|m4a|m4b|ogg|opus|wav|epub|pdf|mobi|azw3|cbz|cbr|iso)$/i;
 
 const pad = (number) => String(number).padStart(2, '0');
@@ -60,10 +74,15 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
   const q = {
     get: db.prepare('SELECT * FROM tracked_downloads WHERE hash = ?'),
     all: db.prepare('SELECT hash, status, progress_at FROM tracked_downloads'),
-    adopt: db.prepare('INSERT OR IGNORE INTO tracked_downloads (hash, name, username, completed, progress_at) VALUES (?, ?, ?, 0, ?)'),
+    adopt: db.prepare('INSERT OR IGNORE INTO tracked_downloads (hash, name, username, completed, progress_at, meant) VALUES (?, ?, ?, 0, ?, ?)'),
+    mean: db.prepare("UPDATE tracked_downloads SET meant = ? WHERE hash = ? AND meant = ''"),
     insert: db.prepare(`
-      INSERT OR REPLACE INTO tracked_downloads (hash, name, username, completed, progress_at, status, attempts, tried, searched_at)
-      VALUES (?, ?, ?, ?, ?, 'watching', ?, ?, 0)`),
+      INSERT OR REPLACE INTO tracked_downloads (hash, name, username, completed, progress_at, status, attempts, tried, searched_at, meant)
+      VALUES (?, ?, ?, ?, ?, 'watching', ?, ?, 0, ?)`),
+    unfiled: db.prepare("SELECT * FROM tracked_downloads WHERE status = 'in-plex' AND meant != '' AND filed IN ('', 'asked') ORDER BY progress_at"),
+    meaning: db.prepare("SELECT hash, meant, filed FROM tracked_downloads WHERE meant != ''"),
+    filed: db.prepare('UPDATE tracked_downloads SET filed = ?, filed_as = ? WHERE hash = ?'),
+    said: db.prepare('SELECT 1 FROM upkeep_log WHERE username = ? AND action = ? AND detail = ? LIMIT 1'),
     progress: db.prepare("UPDATE tracked_downloads SET name = ?, completed = ?, progress_at = ?, status = 'watching', searched_at = 0 WHERE hash = ?"),
     status: db.prepare('UPDATE tracked_downloads SET status = ? WHERE hash = ?'),
     searched: db.prepare('UPDATE tracked_downloads SET searched_at = ? WHERE hash = ?'),
@@ -79,8 +98,13 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
   let running = false;
   let timers = [];
   let lookFailing = false;
+  let filingFailing = false;
   // How often Plex has been asked in vain about each finished download.
   const scanTries = new Map();
+  // How many looks each finished download has waited for Plex: to show it, or to show a correction.
+  const filedLooks = new Map();
+  // The downloads Plex had taken for nothing at all when last seen. It may only not have got to them yet.
+  const unmatchedSeen = new Set();
   // The latest "finished" note for each person and show, so that episodes
   // finishing minutes apart are told in a single note until it has been read.
   const announced = new Map();
@@ -126,7 +150,11 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     if (announced.size > MAX_REMEMBERED_NOTES) announced.delete(announced.keys().next().value);
   }
 
-  /** Where Plex should look for a finished torrent: `{ key, path }`, or null when Plex has no part in it. */
+  /**
+   * Where Plex should look for a finished torrent: `{ key, path, content }`,
+   * or null when Plex has no part in it. `path` is the folder to scan, and
+   * `content` the torrent's own folder or file, both as Plex names them.
+   */
   async function plexFolderOf(torrent) {
     // The most specific library, in case one is set up inside another.
     const library = settings
@@ -146,7 +174,9 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
       const [own] = pathBelow(torrent.save_path, torrent.content_path) ?? [];
       if (own && !LOOSE_FILE.test(own)) folder = joinPath(torrent.save_path, own);
     }
-    return { key: match.key, path: plexPath(library, match, folder) };
+    // qBittorrent names what a torrent saved after the torrent, and says so itself unless it is a very old one.
+    const content = torrent.content_path || joinPath(torrent.save_path, torrent.name);
+    return { key: match.key, path: plexPath(library, match, folder), content: plexPath(library, match, content) };
   }
 
   /**
@@ -206,6 +236,152 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     }
   }
 
+  /**
+   * Sees that Plex took each finished download for the film or show it was
+   * fetched as, which is known where the catalogue named it, and tells Plex
+   * what it is where Plex took it for something else, or for nothing. Each
+   * download goes through this once: what a person changes in Plex afterwards
+   * is theirs. `torrents` is everything of PiRick's in qBittorrent.
+   */
+  async function checkFiling(torrents) {
+    if (!plex?.enabled || !settings.upkeep().fixMatches) return;
+    const present = new Map(torrents.map((torrent) => [torrent.hash, torrent]));
+    // Those that have waited least go first, so that a few Plex never shows do not hold up the rest.
+    const due = q.unfiled
+      .all()
+      .filter((row) => present.has(row.hash))
+      .sort((a, b) => (filedLooks.get(a.hash) ?? 0) - (filedLooks.get(b.hash) ?? 0))
+      .slice(0, MAX_FILED_CHECKS);
+    if (!due.length) return;
+
+    const done = (row, filed) => {
+      q.filed.run(filed, '', row.hash);
+      filedLooks.delete(row.hash);
+      unmatchedSeen.delete(row.hash);
+    };
+    /** Counts one more look for this download. True once it has had as many as it gets. */
+    const waitedOut = (row, most) => {
+      const looks = (filedLooks.get(row.hash) ?? 0) + 1;
+      filedLooks.set(row.hash, looks);
+      return looks >= most;
+    };
+    /** Something went wrong in asking Plex: said once until it works again, and tried again on the next looks. */
+    let trouble = false;
+    const failed = (rows, err) => {
+      if (!filingFailing) log.warn('upkeep: could not check what Plex took a download for, will try again', { title: rows[0].name, error: describeError(err) });
+      filingFailing = true;
+      trouble = true;
+      for (const row of rows) if (waitedOut(row, MAX_FILED_LOOKS)) done(row, row.filed === 'asked' ? 'left' : 'unseen');
+    };
+    /**
+     * Leaves a note for whoever asked for these downloads. What is left for a person to put right is said
+     * once: every later download of the show would otherwise say it again.
+     */
+    const tell = (rows, action, detail) => {
+      for (const username of new Set(rows.map((row) => row.username))) {
+        if (action !== 'misfiled' || !q.said.get(username, action, detail)) note(username, action, detail);
+      }
+    };
+
+    // Which of Plex's films and shows holds each download. Several downloads of one show are settled together.
+    const held = new Map();
+    for (const row of due) {
+      try {
+        const place = await plexFolderOf(present.get(row.hash));
+        const items = place?.content ? await plex.holding(place.key, place.content) : [];
+        if (!place?.content || items.length > 1) {
+          // Not where Plex looks any more, or spread over several things in Plex: nothing to go by.
+          done(row, 'left');
+        } else if (!items.length) {
+          if (waitedOut(row, MAX_FILED_LOOKS)) done(row, 'unseen');
+        } else {
+          const id = `${place.key}|${items[0].id}`;
+          if (!held.has(id)) held.set(id, { item: items[0], rows: [] });
+          held.get(id).rows.push(row);
+        }
+      } catch (err) {
+        failed([row], err);
+      }
+    }
+
+    for (const { item, rows } of held.values()) {
+      const meant = JSON.parse(rows[0].meant);
+      const kind = meant.kind === 'show' ? 'show' : 'film';
+      // Plex writes the year into the name of a show that shares its name: "Kestrelmere (2005)". Said once is enough.
+      const named = ({ title, year }) => `“${title}”${year && !String(title).endsWith(`(${year})`) ? ` (${year})` : ''}`;
+      const all = (filed) => rows.forEach((row) => done(row, filed));
+      try {
+        // Downloads fetched as different things in one place, or a film among shows: nothing to go by.
+        if (item.kind !== PLEX_KINDS[kind] || rows.some((row) => JSON.parse(row.meant).imdb !== meant.imdb)) {
+          all('left');
+          continue;
+        }
+        const told = rows.filter((row) => row.filed === 'asked');
+        if (item.imdb === meant.imdb) {
+          if (told.length) {
+            const before = told[0].filed_as;
+            tell(told, 'filed', before ? `Plex had filed ${named(meant)} as ${before}. That has been corrected.` : `Plex did not recognise ${named(meant)}. It has been told which ${kind} it is.`);
+          }
+          for (const row of rows) done(row, row.filed === 'asked' ? 'corrected' : 'right');
+          continue;
+        }
+        if (told.length) {
+          // Plex was told and still has it as it was. It gets a look or two, then it is a person's to put right.
+          if (!told.map((row) => waitedOut(row, MAX_CONFIRM_LOOKS)).some(Boolean)) continue;
+          const has = item.matched ? `has filed ${named(meant)} as ${named(item)}` : `does not recognise ${named(meant)}`;
+          tell(rows, 'misfiled', `Plex ${has} and did not take the correction. An admin can put it right in Plex with Fix Match.`);
+          all('left');
+          continue;
+        }
+        // Matched, but by an agent that does not say what IMDb calls it: it cannot be told right from wrong.
+        if (item.matched && !item.imdb) {
+          all('left');
+          continue;
+        }
+        // Plex shows a new thing before it has matched it. Only one still unmatched a look later was left so.
+        if (!item.matched && rows.some((row) => !unmatchedSeen.has(row.hash))) {
+          for (const row of rows) unmatchedSeen.add(row.hash);
+          continue;
+        }
+
+        // Only what PiRick put there itself is corrected. The files of downloads fetched as the same thing
+        // that have not been through this check are its own; anything else was in Plex before, or has been
+        // through the check already, and may have been changed by a person since.
+        const mine = [];
+        for (const other of q.meaning.all()) {
+          if (FILED_FOR_GOOD.has(other.filed) || !present.has(other.hash) || JSON.parse(other.meant).imdb !== meant.imdb) continue;
+          const place = await plexFolderOf(present.get(other.hash));
+          if (place?.content) mine.push(place.content);
+        }
+        const others = (await plex.filesOf(item)).filter((file) => !mine.some((path) => pathBelow(path, file)));
+        if (others.length) {
+          // A film with other files is two copies taken for one film. A show kept in two folders is two shows taken for one.
+          if (item.kind === 'movie' || item.folders.length > 1) {
+            tell(rows, 'misfiled', `Plex has put ${named(meant)} together with ${named(item)}, which it already had. Only what PiRick added itself is corrected, so this one is left for an admin: in Plex, use Split Apart on it, then Fix Match on the new one.`);
+          }
+          log.info('upkeep: Plex has a download as something else, among things PiRick did not add', { title: rows[0].name, meant: named(meant), plex: named(item) });
+          all('left');
+          continue;
+        }
+        const to = await plex.candidate(item, meant.imdb);
+        if (!to) {
+          log.info('upkeep: Plex has a download as something else and offers nothing for its IMDb number', { title: rows[0].name, meant: named(meant), plex: named(item) });
+          all('left');
+          continue;
+        }
+        await plex.match(item, to);
+        log.info('upkeep: told Plex what a download is', { title: rows[0].name, meant: named(meant), was: item.matched ? named(item) : 'unmatched' });
+        for (const row of rows) {
+          q.filed.run('asked', item.matched ? named(item) : '', row.hash);
+          filedLooks.delete(row.hash);
+        }
+      } catch (err) {
+        failed(rows, err);
+      }
+    }
+    if (!trouble) filingFailing = false;
+  }
+
   /** Forgets torrents that have been removed from qBittorrent. */
   function forgetMissing(torrents, time) {
     const present = new Set(torrents.map((torrent) => torrent.hash));
@@ -226,10 +402,11 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
       const time = now();
       const torrents = await qbit.tagged(BASE_TAG);
       await finishUp(torrents);
+      await checkFiling(torrents);
       for (const torrent of torrents) {
         if (torrent.progress >= 1) continue;
         const row = q.get.get(torrent.hash);
-        if (!row) q.insert.run(torrent.hash, torrent.name, usernameOf(torrent), torrent.completed ?? 0, time, 0, '[]');
+        if (!row) q.insert.run(torrent.hash, torrent.name, usernameOf(torrent), torrent.completed ?? 0, time, 0, '[]', '');
         // Being downloaded again after it had finished: its clock starts afresh.
         else if (FINISHED.has(row.status)) q.progress.run(torrent.name, torrent.completed ?? 0, time, torrent.hash);
       }
@@ -348,7 +525,8 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     q.remove.run(torrent.hash);
     const chain = JSON.stringify([...tried].slice(-TRIED_KEEP));
     for (const { title, hash } of added) {
-      if (hash) q.insert.run(hash, title, row.username, 0, time, row.attempts + 1, chain);
+      // What the stuck one was fetched as, its replacement is too.
+      if (hash) q.insert.run(hash, title, row.username, 0, time, row.attempts + 1, chain, row.meant);
     }
     // A pack that could only be replaced by single episodes may now be incomplete: say so.
     const piecemeal = parseRelease(torrent.name).kind !== 'episode' && added.every(({ title }) => parseRelease(title).kind === 'episode');
@@ -380,7 +558,7 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
         watching += 1;
         const completed = torrent.completed ?? 0;
         if (!row) {
-          q.insert.run(torrent.hash, torrent.name, usernameOf(torrent), completed, time, 0, '[]');
+          q.insert.run(torrent.hash, torrent.name, usernameOf(torrent), completed, time, 0, '[]', '');
           continue;
         }
         if (FINISHED.has(row.status)) {
@@ -466,10 +644,15 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
 
     /**
      * Called when the chat starts a download, so that one which finishes before
-     * the next look is still noticed.
+     * the next look is still noticed. `meant` is the film or show it was fetched
+     * as, when the catalogue named it: `{ kind: 'film' | 'show', title, year, imdb }`.
      */
-    track({ hash, name, username }) {
-      if (hash) q.adopt.run(hash, name, String(username).toLowerCase(), now());
+    track({ hash, name, username, meant }) {
+      if (!hash) return;
+      const fetchedAs = meant?.imdb ? JSON.stringify({ kind: meant.kind, title: meant.title, year: meant.year ?? null, imdb: meant.imdb }) : '';
+      q.adopt.run(hash, name, String(username).toLowerCase(), now(), fetchedAs);
+      // A look may have come upon it first.
+      if (fetchedAs) q.mean.run(fetchedAs, hash);
     },
 
     /** Hashes of the downloads currently considered stuck. */

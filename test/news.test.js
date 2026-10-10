@@ -7,7 +7,7 @@ const { openDb } = await import('../src/db.js');
 const { MAX_NEWS, NEWS, createNews } = await import('../src/news.js');
 const { createWorld } = await import('../bench/world.js');
 
-const EVERYTHING = { catalogue: true, personalities: true };
+const EVERYTHING = { catalogue: true, personalities: true, matches: true };
 
 function person(db, username, role = 'user') {
   const { lastInsertRowid } = db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, 'none', ?, ?)").run(username, role, Date.now());
@@ -106,13 +106,22 @@ test('PiRick’s own list is numbered in order and says only what this PiRick ha
   assert.deepEqual(told(EVERYTHING), [
     'PiRick has themes and personalities to choose from. Open Account to pick a theme, light or dark, and a personality.',
     'PiRick can answer questions about films, shows and the people in them. Ask what something is about, who is in it, whether it is out yet, what an actor has been in, or for ideas of what to watch.',
+    'PiRick now sees that Plex takes what it fetches for the right film or show. When Plex takes something for another of the same name, or does not recognise it, PiRick tells Plex which it is and leaves you a note.',
   ]);
+  // How to switch that off is for whoever can.
+  const db = openDb(':memory:');
+  const root = person(db, 'root', 'admin');
+  const forAdmin = createNews({ db, has: () => EVERYTHING });
+  forAdmin.heard(root, [1, 2, 3]);
+  assert.deepEqual(texts(forAdmin, root), ['PiRick now corrects a wrong match in Plex by itself, for films and shows it has just added and for nothing that was in Plex before. To switch that off, open Admin, then Upkeep.']);
+  // Without Plex, or with the correcting switched off, there is nothing to tell of it.
+  assert.equal(told({ catalogue: true, personalities: true, matches: false }).length, 2);
   // No catalogue, and an admin who has removed every personality: neither is offered.
   assert.deepEqual(told({ catalogue: false, personalities: false }), ['PiRick has themes to choose from. Open Account to pick a theme, and light or dark.']);
 
   // Each is one plain line that can stand alone in the chat.
   for (const has of [EVERYTHING, { catalogue: true, personalities: false }]) {
-    for (const text of told(has)) assert.match(text, /^PiRick [^\n]{20,280}\.$/);
+    for (const text of [...told(has), ...texts(forAdmin, root)]) assert.match(text, /^PiRick [^\n]{20,280}\.$/);
   }
 });
 

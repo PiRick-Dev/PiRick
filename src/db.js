@@ -38,7 +38,11 @@ const SCHEMA = `
     category    TEXT NOT NULL DEFAULT ''
   );
 
-  -- Unfinished downloads PiRick is watching for progress.
+  -- The downloads PiRick looks after: unfinished ones watched for progress, and
+  -- finished ones until they are removed. "meant" is the film or show one was
+  -- fetched as, when the catalogue said, and "filed" how far the check that Plex
+  -- took it for the same thing has got (see upkeep.js), with what Plex had it as
+  -- in "filed_as" while a correction waits to be confirmed.
   CREATE TABLE IF NOT EXISTS tracked_downloads (
     hash        TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -48,7 +52,10 @@ const SCHEMA = `
     status      TEXT NOT NULL DEFAULT 'watching',
     attempts    INTEGER NOT NULL DEFAULT 0,
     tried       TEXT NOT NULL DEFAULT '[]',
-    searched_at INTEGER NOT NULL DEFAULT 0
+    searched_at INTEGER NOT NULL DEFAULT 0,
+    meant       TEXT NOT NULL DEFAULT '',
+    filed       TEXT NOT NULL DEFAULT '',
+    filed_as    TEXT NOT NULL DEFAULT ''
   );
 
   -- What upkeep did, for the admin screen and for telling each person on their return.
@@ -95,11 +102,22 @@ const SCHEMA = `
   );
 `;
 
+// Columns that tables made by an earlier PiRick lack: [table, column, what it holds].
+const ADDED_COLUMNS = [
+  ['tracked_downloads', 'meant', "TEXT NOT NULL DEFAULT ''"],
+  ['tracked_downloads', 'filed', "TEXT NOT NULL DEFAULT ''"],
+  ['tracked_downloads', 'filed_as', "TEXT NOT NULL DEFAULT ''"],
+];
+
 export function openDb(file) {
   if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
+  for (const [table, column, holds] of ADDED_COLUMNS) {
+    const there = db.prepare(`PRAGMA table_info(${table})`).all().some((entry) => entry.name === column);
+    if (!there) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${holds}`);
+  }
   return db;
 }
 

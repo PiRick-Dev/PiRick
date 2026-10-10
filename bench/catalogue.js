@@ -7,11 +7,12 @@
 // It is handed the films and shows that exist in its world:
 //   film  { title, aliases, original, otherNames, year | date, known, said, directors,
 //           cast, series, follows, genres, country, language, kind, about, page }
-//   show  { id, name, akas, year, weight, country, seasons, last, next, status,
+//   show  { id, name, akas, abroad, year, weight, country, seasons, last, next, status,
 //           type, language, summary, cast, creators, genres }
 // A film's `known` is how many Wikipedias write about it, a show's `weight` is
 // TVmaze's measure out of 100. `otherNames` are a film's names in other
-// languages. `seasons` maps a season number to how many episodes it has; `last`
+// languages; a show's `abroad` are what it is called in other countries, as
+// `{ name, country }`. `seasons` maps a season number to how many episodes it has; `last`
 // is `{ season, episode }`, the latest to have aired, and everything listed
 // has aired when it is left out. `people` are `{ name, about, known }`: people who
 // have had no part in any film or show, whose names an actor's may be taken for.
@@ -99,6 +100,7 @@ export function catalogueStandIn({ films = [], shows = [], people = [], mostRead
   const filmId = (film) => `Q${1000 + films.indexOf(film)}`;
   const showId = (show) => `Q${2000 + shows.indexOf(show)}`;
   const imdbOf = (show) => `tt${String(9000000 + shows.indexOf(show))}`;
+  const filmImdbOf = (film) => `tt${String(8000000 + films.indexOf(film))}`;
   const pageOf = (film) => film.page ?? ((film.known ?? 0) >= 2 ? film.title : null);
 
   for (const film of films) {
@@ -123,6 +125,7 @@ export function catalogueStandIn({ films = [], shows = [], people = [], mostRead
         P495: film.country ? [pointTo(COUNTRIES[film.country] ?? 'Q30')] : [],
         P364: film.language ? [pointTo(LANGUAGES[film.language] ?? 'Q1860')] : [],
         P1476: film.original ? [{ mainsnak: { snaktype: 'value', datavalue: { value: { text: film.original, language: 'und' }, type: 'monolingualtext' } }, rank: 'normal' }] : [],
+        P345: [{ mainsnak: { snaktype: 'value', datavalue: { value: filmImdbOf(film), type: 'string' } }, rank: 'normal' }],
       }),
     });
   }
@@ -291,7 +294,7 @@ export function catalogueStandIn({ films = [], shows = [], people = [], mostRead
       if (match && !show) return match[1] === '1' ? json({ id: 1, name: 'A show' }) : missing();
       if (show) {
         const person = (name) => ({ person: { id: everyone.indexOf(name) + 1, name } });
-        return json({ ...showOf(show), _embedded: { episodes: episodesOf(show), akas: (show.akas ?? []).map((name) => ({ name, country: null })), cast: (show.cast ?? []).map(person), crew: (show.creators ?? []).map((name) => ({ type: 'Creator', ...person(name) })) } });
+        return json({ ...showOf(show), _embedded: { episodes: episodesOf(show), akas: [...(show.akas ?? []).map((name) => ({ name, country: null })), ...(show.abroad ?? []).map(({ name, country }) => ({ name, country: { code: country } }))], cast: (show.cast ?? []).map(person), crew: (show.creators ?? []).map((name) => ({ type: 'Creator', ...person(name) })) } });
       }
       return missing();
     }
