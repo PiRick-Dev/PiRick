@@ -173,16 +173,18 @@ export function createFinder(jackett, { retryCachedEmpty = true, cachedAnswerMs 
      * `onTry(spelling)` is called before each search, to show progress.
      * `title` is the part at the start of the query that is a title, when the
      * caller knows: other spellings are then tried of that part only, and what
-     * follows it ("S02", "05") is left as it is.
+     * follows it ("S02", "05") is left as it is. `asWritten` tries no other
+     * spellings at all, for a caller that is already working through names.
      *
      * Release names are written in plain letters, and not every indexer takes
      * "é" for "e". So a query with accents is searched for without them, and as
      * it was written only if that finds nothing.
      */
-    async search(written, categories, { filter = true, onTry, title } = {}) {
+    async search(written, categories, { filter = true, onTry, title, asWritten = false } = {}) {
       const query = unaccented(written);
       const name = unaccented(title ?? '');
-      const spellingsOf = (asked) => (name && asked.startsWith(name) ? queryVariants(name).map((other) => `${other}${asked.slice(name.length)}`) : queryVariants(asked));
+      const others = (asked) => (name && asked.startsWith(name) ? queryVariants(name).map((other) => `${other}${asked.slice(name.length)}`) : queryVariants(asked));
+      const spellingsOf = (asked) => (asWritten ? [] : others(asked));
       const found = new Map();
       const wanted = mayBePrograms(categories ?? []) ? () => true : (result) => !PROGRAM.test(String(result.title).trim());
       const also = [];

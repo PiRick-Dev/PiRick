@@ -154,6 +154,7 @@ Things to know:
 - When two different shows share a name (say a 1963 and a 2005 series), PiRick does not mix them: it asks which one is meant.
 - A piece of a season is not taken for the season: `S04.Vol.1`, `Season 3 Part 2`, or a run of episodes that does not start at the first. A file that holds two episodes (`S03E01E02`) counts for both.
 - Release names that cannot be read (unusual naming) are left out of these plans. So are those of daily shows, which are named by the date.
+- When a search for a show's name finds nothing at all, PiRick does not go on to search for each of its seasons.
 
 ## Upkeep: finished and stuck downloads
 
@@ -241,19 +242,22 @@ There is no account and no key. Films and people are looked up in [Wikidata](htt
 
 | The catalogue says | What PiRick does |
 |---|---|
-| One film, or one far better known than its namesakes | Searches under the proper title and year. A misspelling or a wrong year no longer costs extra searches, and a wrong year is said to be wrong. A film asked for by another of its names, such as "El acorazado Potemkin" for Battleship Potemkin, is searched for under that name as well, since copies go by both. |
+| One film, or one far better known than its namesakes | Searches under the proper title and year. A misspelling or a wrong year no longer costs extra searches, and a wrong year is said to be wrong. A film asked for by another of its names, such as "El acorazado Potemkin" for Battleship Potemkin, is searched for under that name as well, since copies go by both. The assistant is also given the other films whose names begin the same way, which is where "the new one" and "the third one" of a series are found. |
 | Several films share the name | Searches for nothing yet. The assistant gets up to five, each with its year, director and cast, and either matches what the person said ("the one with John Barrymore") or asks. |
 | Not out yet | Searches for nothing, since a copy offered before release is a fake. Says when it is due. The person can say to look anyway. |
 | It is a show | Has the assistant treat it as one. A little-known film does not stand in for a far better known show of the same name: the assistant is told of both. |
 | Nothing by that name | Searches once, and says it could not be found. |
 
+A name that ends in what reads as a year is taken as it stands when a film or a show is called exactly that, and the number for a year only when none is.
+
 **Shows.** The catalogue supplies the episode guide PiRick otherwise lacks:
 
 - A plan covers every season that has aired. A season nobody has a copy of is reported as not found, and so are single episodes: "season 3: episodes 7 and 8".
 - What has not aired yet is told apart from what could not be found. A season still being shown is fetched episode by episode.
-- "The latest season" is worked out by PiRick. A season or episode that does not exist is said not to.
-- Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer.
+- "The latest season" is worked out by PiRick, for one episode of it too. A season or episode that does not exist is said not to.
+- Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer. Asked for a season that only one of them has got to, PiRick takes that one and does not ask.
 - Of a show with one season, a pack of that season is all of it, whether or not it calls itself complete.
+- A long-running show whose copies are numbered straight through, episode 1 to episode 1,100, cannot be fetched by season, and a pack of its first sixty episodes is not taken for all of it. PiRick says so and asks which episodes are wanted. One episode is fetched by its number.
 - A show's folder is named by the catalogue, so it is the same every time, and a folder it already has under another of its names is reused. PiRick no longer asks whether "The Vampires" belongs in "Les Vampires".
 - A show that shares its name with another gets its year in its folder's name, such as `Kestrelmere (2005)`, which is how Plex writes them, so two shows are never saved into one folder. A folder that is already there is taken for this show's only if it says so: by the year, by the country, as in `Kestrelmere (US)`, or because Plex keeps the show in it.
 - With Plex connected, a show goes into the folder Plex already keeps it in, whatever that folder is called.
@@ -376,7 +380,7 @@ Six things held across models:
 
 A model's size says little by itself: a 24B Mistral scored 74% without the catalogue, at 23 seconds a request.
 
-Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
+Small models make mistakes, most often saying "I've started the download" without doing it. PiRick guards against that: a reply is only shown once it matches what actually happened, and the model is sent back to finish the job if it does not. A reply that says a download is about to start, when it is waiting for the person's yes, is sent back as well. The grey status lines in the chat ("Searched for…", "Found…", "Started downloading…") are written by PiRick, not the model, and always reflect what really happened. Which copies to fetch for a show, what Plex already has, and whether a stuck download gets replaced, are also decided by PiRick's own rules, not by the model.
 
 If a model behaves badly, set `LOG_LEVEL=debug` to see each step it takes in `docker compose logs pirick`, or try a larger model.
 

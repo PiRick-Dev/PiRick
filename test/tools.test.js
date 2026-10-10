@@ -53,6 +53,26 @@ test('replies that claim a download which never happened are caught', () => {
   assert.equal(endedWithoutActing({ searched: true }, "I couldn't find it anywhere, sorry.", 1), false);
   // A list of options is a question even without a question mark.
   assert.equal(endedWithoutActing({ searched: true }, 'Are you looking for:\n\n1. Dr. Jekyll and Mr. Hyde (1920)\n2. Dr. Jekyll and Mr. Hyde (1913)'), false);
+
+  // A download that waits on the user's word may be left with them, as an offer or as a plain account.
+  const waiting = { searched: true, askFirst: true };
+  for (const fine of [
+    'It is a 1963 mystery set in Paris. Say the word and I will fetch it.',
+    'You have seasons 1 and 5. I found seasons 2, 3 and 4: just let me know and I will get them.',
+    'I found seasons 2, 3 and 4, 43 GB in all.',
+    'Once you say yes, I will start it.',
+  ]) {
+    assert.equal(endedWithoutActing(waiting, fine), false, fine);
+  }
+  // Saying it is about to be done is not leaving it with them: nothing will come of it. Sent back once.
+  for (const promise of [
+    "I've found the remaining seasons. Since you already have seasons 1 and 5, I'm going to start downloading seasons 2, 3, and 4. They'll show up once they're finished.",
+    "I found it. I'll go ahead and download the 1080p copy.",
+    'I will start the download now.',
+  ]) {
+    assert.equal(endedWithoutActing(waiting, promise), true, promise);
+    assert.equal(endedWithoutActing(waiting, promise, 1), false, promise);
+  }
 });
 
 test('info hashes are read from hex and base32 magnets', () => {

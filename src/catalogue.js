@@ -29,6 +29,8 @@ const MAX_FILMS_OF_PERSON = 10;
 const MAX_SHOWS_OF_PERSON = 5;
 // How many people of a name are looked at for one who has made something, and how much two people may share.
 const MAX_NAMESAKES = 3;
+// How many films named after the one asked for are passed on with it.
+const MAX_ALIKE = 5;
 const MAX_TOGETHER = 8;
 const MAX_FOUND = 10;
 // Of what a search found, how many with the right name are looked at closely.
@@ -758,7 +760,13 @@ export function createCatalogue(config, { fetch: send = fetch, now = Date.now, p
     if (choice.none) return { none: true };
     const { one, several, ...rest } = choice;
     const full = async (found) => (await source.details(found)) ?? found;
-    return one ? { one: await full(one), ...rest } : { several: await Promise.all(several.map(full)), ...rest };
+    // Films whose names begin with the one asked for, as "Kestrel: The Return" does with "Kestrel": the rest of
+    // a series, as a rule, and where "the new one" or "the third one" is to be found. Newest first.
+    const kept = one ? [one] : several;
+    const after = [...pool.values()].filter((other) => kind === 'film' && other.firm && !kept.includes(other) && nameKey(other.title).startsWith(`${wanted.key} `) && other.leads.includes(wanted.key) && !other.keys.includes(wanted.key));
+    const alike = after.sort((a, b) => (b.year ?? 0) - (a.year ?? 0)).slice(0, MAX_ALIKE).map((other) => ({ kind, title: other.title, year: other.year, date: other.date }));
+    const more = alike.length ? { alike } : {};
+    return one ? { one: await full(one), ...rest, ...more } : { several: await Promise.all(several.map(full)), ...rest, ...more };
   }
   const named = (kind, asked) => remembered(`find ${kind} ${nameKey(asked.title)} ${asked.year ?? ''} ${asked.country ?? ''}`, SEARCH_FRESH_MS, () => find(kind, asked));
   async function found(kind, asked) {

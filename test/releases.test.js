@@ -403,6 +403,31 @@ test('of a show with one season, a pack of that season is all of it', () => {
   assert.equal(buildPlan(mini).torrents, 0);
 });
 
+test('releases that number a show straight through are no part of its seasons', () => {
+  assert.deepEqual(parseRelease('[Subs] Long Voyage - 001-061 [BD 1080p]').span, [1, 61]);
+  assert.deepEqual(parseRelease('[Subs] Long Voyage [062-135] [BD]').span, [62, 135]);
+  assert.equal(parseRelease('[Subs] Long Voyage [Batch] [2019-2020]').span, undefined, 'years are not episodes');
+  assert.equal(parseRelease('[Subs] Long Voyage [Batch]').span, undefined);
+
+  // Three hundred episodes: eight in the first season, fifty in the longest.
+  const sizes = { total: 300, first: 8, largest: 50 };
+  const found = [release('[Subs] Long Voyage - 001-061 [BD 1080p]', 800), release('[Subs] Long Voyage - 299 [1080p]', 300), release('Long.Voyage.S07E300.720p.WEB', 200)];
+  const plan = buildPlan(found, { sizes });
+  assert.deepEqual([plan.torrents, plan.straight], [0, true], 'neither a piece of it nor two late episodes is the show');
+  // One episode is fetched by its number in the whole show, whatever season it is said to be in.
+  assert.deepEqual(titles(buildPlan(found, { sizes, episode: 299 })), ['Season 1: 1 single episode: [Subs] Long Voyage - 299 [1080p]']);
+  assert.deepEqual(titles(buildPlan(found, { sizes, season: 7, episode: 300 })), ['Season 7: 1 single episode: Long.Voyage.S07E300.720p.WEB']);
+  // A run from the first episode to the last is all of it.
+  const whole = buildPlan([...found, release('[Subs] Long Voyage - 001-300 [BD 1080p]', 90)], { sizes });
+  assert.deepEqual([titles(whole), whole.straight], [['Complete series: [Subs] Long Voyage - 001-300 [BD 1080p]'], undefined]);
+  // A run of more episodes than a show has had is of some other show of the name: here one of sixteen episodes.
+  const namesake = [...found, release('Long.Voyage.2023.S01.1080p.WEB', 100), release('Long.Voyage.2023.S02.1080p.WEB', 100)];
+  assert.deepEqual(titles(buildPlan(namesake, { sizes: { total: 16, first: 8, largest: 8 } })), ['Season 1: Long.Voyage.2023.S01.1080p.WEB', 'Season 2: Long.Voyage.2023.S02.1080p.WEB']);
+  // Episodes a first season can hold are still the first season's.
+  const early = buildPlan([release('[Subs] Long Voyage - 05 [1080p]', 50), release('[Subs] Long Voyage - 06 [1080p]', 50)], { sizes, season: 1 });
+  assert.deepEqual([early.torrents, early.straight], [2, undefined]);
+});
+
 test('a guide is taken at its word for how many seasons there are', () => {
   const seasons = Array.from({ length: 34 }, (unused, i) => i + 1);
   const found = seasons.map((number) => release(`Show.S${String(number).padStart(2, '0')}.1080p`, 20));

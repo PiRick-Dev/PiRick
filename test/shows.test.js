@@ -533,6 +533,82 @@ test('searches are not spent on what a show is called abroad, on other ways to w
   }
 });
 
+test('a season only one of several same-named shows has settles which is meant, and a name may end in a year', async () => {
+  const shows = [
+    { id: 1, name: 'Harbour Watch', year: 2005, weight: 90, country: 'US', seasons: seasons(9, 22) },
+    { id: 2, name: 'Harbour Watch', year: 2001, weight: 70, country: 'GB', seasons: seasons(2, 6) },
+    { id: 3, name: 'Harbour', year: 2010, weight: 60, country: 'US', seasons: seasons(1) },
+    { id: 4, name: 'Harbour 1900', year: 2015, weight: 40, country: 'GB', seasons: seasons(1, 6) },
+  ];
+  const chat = world(shows, [['Harbour.Watch.US.S03.1080p.BluRay.x265-GRP', 900, 20], ['Harbour.1900.S01.1080p.WEB-DL.x264-GRP', 80, 9]]);
+  try {
+    // Only the American one got as far as a third season, so there is nothing to ask.
+    const third = await chat.say('Get season 3 of Harbour Watch', [show({ title: 'Harbour Watch', season: 3 }), get('TV', 'Harbour Watch')], 'Done.');
+    assert.equal(third.outputs[0].catalogue, 'This is Harbour Watch (2005, United States, 9 seasons). One other show has the same name, and it has no season 3.');
+    assert.equal(third.record.statuses[0], 'Took “Harbour Watch” to be Harbour Watch (2005), the only show of that name with a season 3');
+    assert.deepEqual(titles(chat), ['Harbour.Watch.US.S03.1080p.BluRay.x265-GRP']);
+    // Both have a first season, so that is still asked.
+    const first = await chat.say('And season 1', [show({ title: 'Harbour Watch', season: 1 })], 'The American or the British one?');
+    assert.equal(first.outputs[0].which_one.length, 2);
+
+    // "1900" reads as a year, and no show called Harbour began then: the whole of it is a show's name.
+    const dated = await chat.say('Get Harbour 1900', [show({ title: 'Harbour 1900' }), get('TV', 'Harbour 1900')], 'Done.');
+    assert.equal(dated.outputs[0].catalogue, 'This is Harbour 1900 (2015, United Kingdom, 1 season).');
+    assert.equal(titles(chat).at(-1), 'Harbour.1900.S01.1080p.WEB-DL.x264-GRP');
+  } finally {
+    chat.close();
+  }
+});
+
+test('the latest season can be asked for by episode, and nothing found under the name ends the looking', async () => {
+  const chat = pirick();
+  const nowhere = world([{ id: 1, name: 'Evergreen Lane', year: 1989, weight: 90, country: 'US', seasons: seasons(12) }], []);
+  try {
+    // Tales of the Kestrel is in its third season, of which three episodes have been shown.
+    const due = await chat.say('Get episode 4 of the new season of Tales of the Kestrel', [show({ title: 'Tales of the Kestrel', latest: true, episode: 4 })], 'It is not out yet.');
+    assert.match(due.outputs[0].catalogue, /Only 3 episodes of season 3 of Tales of the Kestrel have aired so far\. It is due on /);
+    assert.deepEqual(chat.world.trace().searches, [], 'nothing was looked for');
+    const shown = await chat.say('Then episode 2 of it', [show({ title: 'Tales of the Kestrel', latest: true, episode: 2 })], 'Shall I get it?');
+    assert.match(shown.record.statuses.at(-1), /^Found season 3 episode 2 of “Tales of the Kestrel”: /);
+
+    // Twelve seasons, and not one copy of any of it: one search says so. It used to take fourteen.
+    const none = await nowhere.say('Get all of Evergreen Lane', [show({ title: 'Evergreen Lane' })], 'I could not find it.');
+    assert.equal(none.outputs[0].found, false);
+    assert.deepEqual(nowhere.world.trace().searches, ['Evergreen Lane']);
+  } finally {
+    chat.close();
+    nowhere.close();
+  }
+});
+
+test('a show whose copies are numbered straight through is not planned by seasons, nor a piece of it taken for all', async () => {
+  // Three hundred episodes, which the catalogue files in seven seasons and release names number from 1 to 300.
+  const long = { id: 1, name: 'Long Voyage', year: 1999, weight: 90, country: 'JP', type: 'Animation', language: 'Japanese', seasons: { 1: 8, 2: 44, 3: 48, 4: 50, 5: 50, 6: 50, 7: 50 } };
+  const ANIME = [5000, 5070];
+  const copies = (names) => corpusOf(names.map(([name, seeders = 100, size = 5]) => listing(name, seeders, size, ANIME)));
+  const pieces = talkTo({ catalogue: { shows: [long] } }, { corpus: copies([['[Subs] Long Voyage - 001-061 [BD 1080p] (First Saga)', 800, 48], ['[Subs] Long Voyage - 062-135 [BD 1080p]', 500, 57], ['[Subs] Long Voyage - 299 [1080p]', 300, 1.4], ['[Subs] Long Voyage - 300 [1080p]', 320, 1.4]]) });
+  const whole = talkTo({ catalogue: { shows: [long] } }, { corpus: copies([['[Subs] Long Voyage - 001-061 [BD 1080p] (First Saga)', 800, 48], ['[Subs] Long Voyage - 001-300 [BD 1080p]', 90, 280]]) });
+  try {
+    const none = await pieces.say('Get Long Voyage', [show({ title: 'Long Voyage' })], 'It is too long to fetch whole. Which episodes?');
+    assert.equal(none.outputs[0].found, false);
+    assert.equal(none.outputs[0].releases, 'Copies of Long Voyage are numbered straight through its 300 episodes, not by season, and no pack was found that holds all of them.');
+    assert.match(none.outputs[0].note, /ask which episodes they are after/);
+    assert.equal(none.record.statuses.at(-1), 'Looked for “Long Voyage”: its 300 episodes are numbered straight through, and nothing holds all of them');
+    assert.equal(none.record.nudges, 0, 'saying so is a complete answer');
+    // One episode is asked for by its number in the whole show.
+    const one = await pieces.say('Episode 299 then', [show({ title: 'Long Voyage', episode: 299 }), get('Anime', 'Long Voyage')], 'Done.');
+    assert.deepEqual(titles(pieces), ['[Subs] Long Voyage - 299 [1080p]']);
+    assert.equal(one.record.nudges, 0);
+
+    // A pack that runs from the first episode to the last is all of it, and the first sixty-one are not.
+    await whole.say('Get Long Voyage', [show({ title: 'Long Voyage' }), get('Anime', 'Long Voyage')], 'Done.');
+    assert.deepEqual(titles(whole), ['[Subs] Long Voyage - 001-300 [BD 1080p]']);
+  } finally {
+    pieces.close();
+    whole.close();
+  }
+});
+
 test('an episode of an anime is looked for the way fansub releases number it', async () => {
   const chat = pirick();
   try {

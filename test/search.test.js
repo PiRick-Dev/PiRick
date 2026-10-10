@@ -209,6 +209,10 @@ test('told which part of a query is the title, other spellings are tried of that
   const told = fakeJackett({});
   await createFinder(told, { retryCachedEmpty: false }).search('Copperhollow 05', [5000], { filter: false, title: 'Copperhollow' });
   assert.deepEqual(told.asked, ['Copperhollow 05']);
+  // A caller that is working through a thing's names itself asks for each as it is written.
+  const names = fakeJackett({});
+  await createFinder(names, { retryCachedEmpty: false }).search('Kestrel 2 1979', [2000], { asWritten: true });
+  assert.deepEqual(names.asked, ['Kestrel 2 1979']);
 });
 
 test('an instant empty answer is Jackett’s cache talking, so it is asked again in other capitals', async () => {

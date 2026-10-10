@@ -142,12 +142,23 @@ function nudge(request, claimed, failed, askFirst) {
   }
   // Nor can one start a download that is waiting for the user's word.
   if (askFirst) {
-    return `[Automatic check, not written by the user] Your last message was not shown to the user because it said something is downloading, but nothing is: the download tool said to ask the user first. Do not call download again. Tell the user what you found and ask whether they want it, without saying that anything is downloading.`;
+    const why = claimed ? 'it said something is downloading, but nothing is' : 'it did not ask the user anything, and nothing is downloading or will be until they answer';
+    return `[Automatic check, not written by the user] Your last message was not shown to the user because ${why}: the download tool said to ask the user first. Do not call download again. Tell the user what you found and ask whether they want it, without saying that anything is downloading.`;
   }
   const problem = claimed
     ? 'it said something is downloading, but no download call succeeded in this turn, so that is not true yet'
     : 'you stopped before finishing: you searched, but then neither downloaded anything nor asked the user anything';
   return `[Automatic check, not written by the user] Your last message was not shown to the user because ${problem}. The user's request was: "${request.slice(0, 300)}". Do this now: call download with the id of the right search result (calling search_media first if you have no results for it). This is safe even if the user already has it: download will tell you. Reply in words instead, without saying that anything is downloading, only in one of these cases: you need the user to choose, nothing matches, none of the libraries fits this kind of thing, or the user only asked a question and did not ask for anything to be downloaded.`;
+}
+
+// "I'll start the download", "I'm going to get seasons 2 and 3".
+const PROMISE = /\bI(?:['’]ll| will|['’]m going to| am going to|['’]m about to| am about to)\s+(?:now |just |also |then |go ahead and )*(?:start|begin|get|download|grab|fetch|queue|add)\w*\b/i;
+// Words that make such a sentence an offer: "say the word and I'll fetch it".
+const ON_THEIR_WORD = /\b(?:if|once|when|whenever|let me know|say the word|just say|just ask|as soon as you|should you|would you like)\b/i;
+
+/** Whether a reply says a download is about to be made, with no "if you like" about it. */
+function promises(text) {
+  return String(text).split(/(?<=[.!])\s+|\n+/).some((sentence) => PROMISE.test(sentence) && !ON_THEIR_WORD.test(sentence));
 }
 
 /** Two or more numbered or bulleted lines: the model is offering the user a choice. */
@@ -170,9 +181,13 @@ export function endedWithoutActing(turn, text, nudges = 0) {
   if (turn.succeeded || turn.listed || QUESTION.test(text)) return false;
   if (CLAIM.test(text)) return true;
   // Reporting a failure, offering options, or saying that the user already has
-  // it, that it does not exist, that it is not out yet or that it waits on their
-  // word, is a legitimate way to stop.
-  if (turn.failed || turn.have || turn.known || turn.askFirst || offersChoices(text)) return false;
+  // it, that it does not exist or that it is not out yet, is a legitimate way
+  // to stop.
+  if (turn.failed || turn.have || turn.known || offersChoices(text)) return false;
+  // A download that waits on the user's word may be left with them, question mark
+  // or not. But "I'm going to start it now" leaves them waiting for what will not
+  // come: that is sent back once.
+  if (turn.askFirst) return promises(text) && nudges === 0;
   // Searched, then stopped with neither a download nor a question. Wording is not
   // checked here, so this works in any language, but once is enough.
   return Boolean(turn.searched) && nudges === 0;

@@ -343,6 +343,39 @@ test('a new film with the name of an old one is offered beside it, however well 
   }
 });
 
+test('a film whose name ends in what reads as a year is that film, and the films whose names begin with one are passed on with it', async () => {
+  const soon = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
+  const films = [
+    { title: 'Harrow Deep', year: 1982, known: 84, directors: ['Ines Carrow'] },
+    { title: 'Harrow Deep 2049', year: 2017, known: 70, directors: ['Tobin Marsh'] },
+    { title: 'Kestrel Rising', year: 2012, known: 80, directors: ['Ines Carrow'] },
+    { title: 'Kestrel Rising: Nightfall', year: 2018, known: 50 },
+    { title: 'Kestrel Rising: Last Light', date: soon, known: 30 },
+  ];
+  const chat = talkTo({ catalogue: { films } });
+  try {
+    // No film called Harrow Deep is from 2049, and one is called exactly "Harrow Deep 2049".
+    const dated = await chat.say('Get Harrow Deep 2049', [film('Harrow Deep 2049')], 'I could not find a copy.');
+    assert.equal(dated.outputs[0].catalogue, 'This is Harrow Deep 2049 (2017), directed by Tobin Marsh.');
+    assert.equal(chat.world.trace().searches[0], 'Harrow Deep 2049 2017');
+    // A year is still a year where no film has it in its name.
+    const wrong = await chat.say('Get Harrow Deep from 1985', [film('Harrow Deep 1985')], 'I could not find a copy.');
+    assert.match(wrong.outputs[0].catalogue, /^No film called “Harrow Deep” is from 1985\. The film of that name is Harrow Deep \(1982\)/);
+
+    // "The new one" and "the third one" are among the films whose names begin the same way, which come with it, newest first.
+    const after = [`Kestrel Rising: Last Light (${soon.slice(0, 4)}), not out yet`, 'Kestrel Rising: Nightfall (2018)'];
+    const asked = await chat.say('Is the new Kestrel Rising out?', [call('look_up', { title: 'Kestrel Rising', kind: 'film' })], 'Not yet.');
+    assert.deepEqual(asked.outputs[0].names_that_begin_the_same, after);
+    const fetched = await chat.say('Get Kestrel Rising then', [film('Kestrel Rising')], 'I could not find a copy.');
+    assert.equal(fetched.outputs[0].catalogue, `This is Kestrel Rising (2012), directed by Ines Carrow. Other films whose names begin the same way: ${after.join('; ')}.`);
+    // Asked for by its full name, a film has none named after it.
+    const one = await chat.say('What is Kestrel Rising: Nightfall?', [call('look_up', { title: 'Kestrel Rising: Nightfall', kind: 'film' })], 'A film from 2018.');
+    assert.equal(one.outputs[0].names_that_begin_the_same, undefined);
+  } finally {
+    chat.close();
+  }
+});
+
 test('a little-known film does not stand in for a well-known show of the same name', async () => {
   const chat = talkTo({
     catalogue: {
