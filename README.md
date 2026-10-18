@@ -14,12 +14,12 @@ Only people with an account can use it. Accounts are created by an admin.
 
 ## What it looks like
 
-PiRick works the same on a phone as on a desktop. Everyone gets the chat and a **Downloads** panel that says in plain words how each download is doing. Admins also get the **Admin** screen.
+PiRick works the same on a phone as on a desktop. Everyone gets the chat and a **Downloads** panel that says in plain words how each film and show is doing, with what needs a look at the top. Admins also get the **Admin** screen.
 
 <p align="center">
   <img src="docs/screenshots/phone-welcome.png" width="31%" alt="The welcome screen on a phone, with buttons to get a movie, get a TV season or check downloads">
   <img src="docs/screenshots/phone-chat-night.png" width="31%" alt="A chat on a phone in dark mode, with PiRick looking for a season of a show">
-  <img src="docs/screenshots/phone-downloads.png" width="31%" alt="The Downloads panel on a phone: one download in progress, one finished, one stuck and one waiting its turn">
+  <img src="docs/screenshots/phone-downloads.png" width="31%" alt="The Downloads panel on a phone. A line sums it up, then come one film that is stuck, two that are on the way and one show that has finished">
 </p>
 
 Out of the box the look follows the device's light or dark setting. Dark mode is the same scene at night:
@@ -113,6 +113,8 @@ A typical setup is three libraries: Movies (no subfolders), TV and Anime (a subf
 This works well for a show's later seasons and for alternative titles the assistant recognises. It cannot know that two completely different names are the same show. When that happens the chat says `(new folder)`, and you can move the download to the right folder in qBittorrent.
 
 Every download PiRick adds is tagged `pirick` and `pirick-<username>` in qBittorrent, so you can see who asked for what. If someone asks for something that is already in qBittorrent and was not added by PiRick, it only gets the `pirick-<username>` tag. It shows in that person's downloads, but PiRick does not treat it as its own: upkeep leaves it alone, and it is not listed under **Show everyone's**.
+
+**The Downloads panel** gathers downloads by what they are. A show that came as twenty separate downloads is one row under the show's name, with how far along all of it is. The row opens to its parts, each with the name it has in qBittorrent. A line at the top sums it up, such as `1 needs a look · 3 on the way · 12 finished`, and the rows follow in that order: what is stuck or broken first, then what is on the way, with what is moving ahead of what is waiting, then what has finished. Finished rows are folded away while anything else is going on. An admin can tick **Show everyone's** to see all of PiRick's downloads, and each row then says who asked for it. The newest 500 downloads are taken in.
 
 ## How searching works
 

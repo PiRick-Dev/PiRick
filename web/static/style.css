@@ -2215,17 +2215,85 @@ dialog::backdrop {
   list-style: none;
 }
 
+/* The Downloads panel: a line that sums it up, then what needs a look, what is
+   on the way, and what has finished, which folds away. */
+.dl-heading {
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dl-fold > summary,
+.dl-row > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.dl-fold > summary::-webkit-details-marker,
+.dl-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The arrow that says a line opens. It turns when it has, with no motion in between. */
+.dl-fold .dl-heading::before,
+.dl-name::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 0;
+  height: 0;
+  border-block: 0.3em solid transparent;
+  border-inline-start: 0.45em solid var(--muted);
+}
+
+.dl-fold .dl-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dl-fold[open] > summary .dl-heading::before,
+.dl-row[open] .dl-name::before {
+  transform: rotate(90deg);
+}
+
+.dl-fold[open] > summary {
+  margin-bottom: 12px;
+}
+
 .downloads .download {
-  display: grid;
-  gap: 6px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
 }
 
+.dl-row > summary {
+  display: grid;
+  gap: 6px;
+}
+
+/* What it is, which part of it, and at the far end who asked. */
 .dl-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.dl-detail,
+.dl-for {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.dl-for {
+  margin-inline-start: auto;
+  font-size: 0.85rem;
 }
 
 .dl-meta {
@@ -2233,13 +2301,45 @@ dialog::backdrop {
   font-size: 0.85rem;
 }
 
-.downloads .download.finished .dl-meta {
+.dl-meta.finished {
   color: var(--good);
 }
 
-.downloads .download.error .dl-meta,
-.downloads .download.stuck .dl-meta {
+.dl-meta.error,
+.dl-meta.stuck {
   color: var(--danger);
+}
+
+/* The downloads a row is made up of, each under the name its maker gave it. */
+.sheet .dl-parts {
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.dl-parts li {
+  display: grid;
+  gap: 2px;
+}
+
+/* Which part it is, and beside it how that part is doing. */
+.dl-part {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 10px;
+}
+
+.dl-part-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.dl-release {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 progress {

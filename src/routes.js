@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { PASSWORD_MAX, createRateLimiter, validatePassword, validateUsername } from './auth.js';
 import { UpstreamError, describeError } from './errors.js';
+import { groupDownloads } from './downloads.js';
 import { checkFolder, isAbsolutePath, joinPath, splitPath, tidyPath } from './folders.js';
 import { log } from './log.js';
 import { matchLibrary } from './plex.js';
@@ -14,6 +15,8 @@ const WEB_DIR = fileURLToPath(new URL('../web', import.meta.url));
 const MAX_MESSAGE_LENGTH = 2000;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const HEARTBEAT_MS = 15_000;
+// The newest this many are laid out for the Downloads panel. Gathered by show, they make far fewer rows.
+const MAX_DOWNLOADS_SHOWN = 500;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -273,16 +276,16 @@ export function createApp({ config, auth, agent, conversation, tools, settings, 
       const downloads = await qbit.list(everyone ? BASE_TAG : userTag(req.user.username));
       const stuck = upkeep.stuckHashes();
       const inPlex = upkeep.inPlex();
-      res.json({
-        downloads: downloads.slice(0, 100).map(({ hash, requestedBy, ...item }) => ({
-          ...item,
-          ...(stuck.has(hash) && { status: 'stuck', etaSeconds: null }),
-          // Only said of the ones Plex has actually been asked to pick up.
-          ...(inPlex.has(hash) && item.status === 'finished' && { inPlex: true }),
-          // Who asked for what is only for an admin looking at everyone's.
-          ...(everyone && { requestedBy }),
-        })),
-      });
+      const listed = downloads.slice(0, MAX_DOWNLOADS_SHOWN).map(({ hash, requestedBy, ...item }) => ({
+        ...item,
+        ...(stuck.has(hash) && { status: 'stuck', etaSeconds: null }),
+        // Only said of the ones Plex has actually been asked to pick up.
+        ...(inPlex.has(hash) && item.status === 'finished' && { inPlex: true }),
+        // Who asked for what is only for an admin looking at everyone's.
+        ...(everyone && { requestedBy }),
+      }));
+      // Gathered by show or film and laid out in sections, which is how the panel shows them.
+      res.json({ ...groupDownloads(listed, settings.libraries()), older: Math.max(0, downloads.length - MAX_DOWNLOADS_SHOWN) });
     } catch (err) {
       log.warn('downloads unavailable', { error: describeError(err) });
       res.status(502).json({ error: explain(err, req.user) });
