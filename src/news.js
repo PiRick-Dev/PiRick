@@ -48,6 +48,10 @@ export const NEWS = [
     id: 5,
     text: 'PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.',
   },
+  {
+    id: 6,
+    text: 'PiRick now looks inside each download as it starts. One that turns out to hold a program, or nothing that can be played, is removed and another copy fetched in its place, and you are told when that happens.',
+  },
 ];
 
 /**

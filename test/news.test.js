@@ -116,24 +116,29 @@ test('PiRick’s own list is numbered in order and says only what this PiRick ha
     'PiRick now sees that Plex takes what it fetches for the right film or show. When Plex takes something for another of the same name, or does not recognise it, PiRick tells Plex which it is and leaves you a note.',
   ]);
   // Three are told at a time. The rest come with the next message.
-  assert.deepEqual(toldNext(EVERYTHING), ['PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.']);
+  assert.deepEqual(toldNext(EVERYTHING), [
+    'PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.',
+    'PiRick now looks inside each download as it starts. One that turns out to hold a program, or nothing that can be played, is removed and another copy fetched in its place, and you are told when that happens.',
+  ]);
   // How to switch that off is for whoever can.
   const db = openDb(':memory:');
   const root = person(db, 'root', 'admin');
   const forAdmin = createNews({ db, has: () => EVERYTHING });
-  forAdmin.heard(root, [1, 2, 3, 5]);
+  forAdmin.heard(root, [1, 2, 3, 5, 6]);
   assert.deepEqual(texts(forAdmin, root), ['PiRick now corrects a wrong match in Plex by itself, for films and shows it has just added and for nothing that was in Plex before. To switch that off, open Admin, then Upkeep.']);
   // Without Plex, or with the correcting switched off, there is nothing to tell of it.
   assert.equal(told({ catalogue: true, personalities: true, matches: false }).length, 3);
+  assert.equal(told({ catalogue: true, personalities: true, matches: false }).includes(told(EVERYTHING)[2]), false);
   // No catalogue, and an admin who has removed every personality: neither is offered.
   assert.deepEqual(told({ catalogue: false, personalities: false }), [
     'PiRick has themes to choose from. Open Account to pick a theme, and light or dark.',
     'PiRick has a tidier Downloads panel. A show is one line that opens to its episodes, what needs a look comes first, and finished downloads are folded away at the bottom.',
+    'PiRick now looks inside each download as it starts. One that turns out to hold a program, or nothing that can be played, is removed and another copy fetched in its place, and you are told when that happens.',
   ]);
 
   // Each is one plain line that can stand alone in the chat.
   for (const has of [EVERYTHING, { catalogue: true, personalities: false }]) {
-    for (const text of [...told(has), ...texts(forAdmin, root)]) assert.match(text, /^PiRick [^\n]{20,280}\.$/);
+    for (const text of [...told(has), ...toldNext(has), ...texts(forAdmin, root)]) assert.match(text, /^PiRick [^\n]{20,280}\.$/);
   }
 });
 

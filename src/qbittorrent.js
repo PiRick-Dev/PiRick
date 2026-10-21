@@ -204,6 +204,17 @@ export function createQbittorrent(config) {
     /** Torrents carrying `tag`, as qBittorrent reports them apart from a tidied name. */
     tagged: (tag) => info({ tag }),
 
+    /**
+     * The files a torrent holds, as `[{ name, size }]` with each name its path
+     * inside the torrent. Empty until qBittorrent has the torrent's metadata,
+     * which for a magnet link takes a moment after it is added.
+     */
+    async files(infoHash) {
+      const res = await request(`/api/v2/torrents/files?${new URLSearchParams({ hash: infoHash })}`);
+      const list = await res.json();
+      return Array.isArray(list) ? list.map((file) => ({ name: String(file.name ?? ''), size: Number(file.size) || 0 })) : [];
+    },
+
     /** Removes a torrent from qBittorrent, and its files from disk when asked. */
     async remove(infoHash, deleteFiles) {
       await request('/api/v2/torrents/delete', {

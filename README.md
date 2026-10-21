@@ -32,7 +32,7 @@ Each person can pick another theme, and have it light or dark whatever their dev
 
 ## Quick start
 
-You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere PiRick can reach.
+You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere PiRick can reach. If you have none of those yet, "Starting everything at once" below runs them all beside PiRick, with qBittorrent behind a VPN.
 
 1. Put `docker-compose.yml` and `.env.example` from this repository in a folder (clone it, or download just those two files). Copy the example settings and fill them in:
 
@@ -59,6 +59,62 @@ You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere 
 5. Open **Admin > Libraries** and add the folders downloads should go into, for example Movies, TV and Anime. PiRick refuses to download until at least one exists. See "Libraries" below.
 
 6. Change your password under **Account**, then add the people who should have access under **Admin > People**.
+
+## Starting everything at once
+
+If you have no Ollama, Jackett or qBittorrent yet, `docker-compose.full.yml` runs all of them beside PiRick on one machine:
+
+| Service | What it does | Where you reach it |
+|---|---|---|
+| PiRick | This app | `http://<this-machine>:8787` |
+| Ollama | The AI model, which is fetched on the first start | Nowhere: only PiRick can |
+| Jackett, with FlareSolverr | Searches your indexers. FlareSolverr opens sites that sit behind Cloudflare | `http://<this-machine>:9117` |
+| qBittorrent, inside a VPN | Downloads, with all of its traffic going through the VPN | `http://<this-machine>:8080` |
+
+Plex is not part of it. Point Plex's libraries at the folders the downloads go into, wherever Plex runs.
+
+**About the VPN.** While qBittorrent downloads something, everyone else sharing the same file can see the internet address it comes from. In this stack qBittorrent has no network connection of its own. It lives inside a VPN container, [gluetun](https://github.com/qdm12/gluetun), so everything it sends and receives goes through the VPN, and if the VPN drops, qBittorrent is cut off instead of falling back to your own connection. The other services use your connection as usual, so the indexer sites see your address when Jackett searches them.
+
+- You need an account with a VPN provider that allows BitTorrent. gluetun knows most providers, and [its wiki](https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers) says what each one needs.
+- WireGuard is faster than OpenVPN, where the provider offers it.
+- A VPN keeps your address from the people you download from and share with. It does not change what you are allowed to download where you live.
+
+**Setting it up.**
+
+1. Put `docker-compose.full.yml`, `.env.example` and `vpn.env.example` from this repository in a folder, and copy the two examples:
+
+   ```
+   cp .env.example .env
+   cp vpn.env.example vpn.env
+   ```
+
+2. In `vpn.env`, fill in your VPN provider and its login. Only the VPN container reads this file, and git leaves it out.
+3. In `.env`, set `MEDIA_DIR` to the folder your films and shows are to be kept in, `PUID` and `PGID` to what `id -u` and `id -g` print, and `TZ` to your time zone. Leave the three service addresses as they are: the compose file sets them. Make a folder for each kind of thing under `MEDIA_DIR`, for example `mkdir -p /srv/media/Movies /srv/media/TV /srv/media/Anime`.
+4. Start it:
+
+   ```
+   docker compose -f docker-compose.full.yml up -d
+   ```
+
+   The first start downloads the images and the AI model, several GB in all. `docker compose -f docker-compose.full.yml logs -f ollama-model` shows how far the model has got.
+5. Check the VPN before anything else. Its log says which address it goes out from, and that must be the VPN's, not your own:
+
+   ```
+   docker compose -f docker-compose.full.yml logs vpn
+   ```
+
+   Look for the line `Public IP address is …`. If there is none, the VPN has not connected, and the lines before say why. qBittorrent waits for the VPN, so it does not start until the VPN is up.
+6. Open qBittorrent at `http://<this-machine>:8080` and sign in as `admin` with the temporary password that `docker compose -f docker-compose.full.yml logs qbittorrent` shows. Set a password of your own under **Tools > Options > Web UI**, and put it in `.env` as `QBIT_PASSWORD`, with `QBIT_USERNAME=admin`.
+7. Open Jackett at `http://<this-machine>:9117`. Set an admin password at the bottom of the page, since it has none to begin with, and add your indexers. For sites behind Cloudflare, set **FlareSolverr API URL** to `http://flaresolverr:8191`. Copy the API key from the top right into `.env` as `JACKETT_API_KEY`.
+8. Run `docker compose -f docker-compose.full.yml up -d` again so PiRick picks the settings up, and carry on from step 3 of the Quick start. The libraries' folders are `/media/Movies`, `/media/TV` and `/media/Anime`: the folders under `MEDIA_DIR`, as qBittorrent sees them.
+
+Things to know:
+
+- Ollama runs on the processor unless it is given the graphics card. `docker-compose.full.yml` says how, for NVIDIA and for AMD. On the processor a reply can take a minute or more; see "Choosing a model" for smaller models.
+- Ollama has no login, so its port is not published at all. The pages of Jackett and qBittorrent are published on your network so you can set them up: keep them off the internet.
+- To send Jackett's searches through the VPN as well, put Jackett and FlareSolverr behind it the way qBittorrent is. gluetun's wiki shows how.
+- Some providers let other peers reach you through the VPN, which finds more people to download from. `vpn.env` says where to switch it on. Downloads work without it.
+- Updating is `docker compose -f docker-compose.full.yml pull`, then `docker compose -f docker-compose.full.yml up -d`.
 
 ## Reaching your other services
 
@@ -125,7 +181,7 @@ Indexers match release names literally, and they are not careful with numbers. A
 - **Extra words dropped.** Release names do not contain cast or crew. The model is told to search by title and year alone; if a search with extra words after the year still finds nothing, PiRick retries without them.
 - **Plain letters.** Release names are written without accents, and not every indexer takes "é" for "e". A title with accents is searched for without them, and as it was written only if that finds nothing.
 
-**Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. An advert that is named like an ordinary copy cannot be told by a rule like this. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
+**Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. A fake named like an ordinary copy is caught a little later, once qBittorrent knows its files: one that holds a program, or nothing that can be played, is removed and replaced (see "Upkeep"). An advert that holds a video of its own cannot be told that way. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
 
 Searches run one at a time, and a further spelling is only tried when the one before was not enough. This matters when indexers sit behind a Cloudflare solver such as FlareSolverr: each search then takes 10 to 20 seconds, and several sent at once come back with far fewer results, sometimes none. If your indexers are fast and direct, `JACKETT_SEARCHES_AT_ONCE` lets the whole-show planner look at several seasons together.
 
@@ -160,7 +216,9 @@ Things to know:
 
 ## Upkeep: finished and stuck downloads
 
-PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does three things.
+PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does four things.
+
+**What is inside.** As soon as qBittorrent knows the files of a new download, which for most is within a minute of it starting, PiRick looks at them. A film or an episode that turns out to hold a program (`.exe`, `.lnk`, `.scr` and the like), or nothing that can be played, such as only `.rar` or `.zip` archives, is a fake. It is removed with its files before it can be announced as finished, and another copy is fetched in its place, which is looked at in its turn. The person who asked is told: `“Wrenfield Cross (S03E05)” was not what its name said: it held a program (a file ending in .exe), not a video. It was removed with its files, and another copy (“Wrenfield.Cross.S03E05.1080p.WEB.H264-GRP”) is being fetched instead.` No other copy is fetched of an episode that has not aired yet, since every copy of it is a fake, nor of one that has been replaced three times already. Albums, books and anything whose name does not say it is a film or a show are left as they are, and so is what PiRick had before it looked inside downloads. This part is always on.
 
 **Finished downloads.** Every minute PiRick looks for downloads that have just finished. For each one it leaves a note for the person who asked, which they get the next time they open PiRick: `“Wrenfield Cross (S03E01)” has finished downloading.` Episodes of one show that finish before the note is read are gathered into one note. With Plex connected, PiRick also asks Plex to pick the download up straight away, and the note says so. This part is always on.
 
@@ -282,6 +340,7 @@ A name that ends in what reads as a year is taken as it stands when a film or a 
 
 - A plan covers every season that has aired. A season nobody has a copy of is reported as not found, and so are single episodes: "season 3: episodes 7 and 8".
 - What has not aired yet is told apart from what could not be found. A season still being shown is fetched episode by episode.
+- An episode that has not aired yet is never fetched, however it is asked for. Searched for by its number, it is not searched for at all, copies of it are left out of every search, and one that reaches the download all the same is refused. Every such copy is a fake, and fakes are how programs get passed off as videos.
 - "The latest season" is worked out by PiRick, for one episode of it too. A season or episode that does not exist is said not to.
 - Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer. Asked for a season that only one of them has got to, PiRick takes that one and does not ask.
 - Of a show with one season, a pack of that season is all of it, whether or not it calls itself complete.
@@ -401,7 +460,7 @@ What the comparison found (October 2026, Ollama 0.35.1 and 0.40.0, a 16 GB Radeo
 
 Six things held across models:
 
-- **Two of the small models cannot tell an advert from a film.** One search in the comparison returns, as its best-shared result, an advert named like a 1080p copy of the film. `gemma4:12b`, `ornith:9b` and `qwen3.8:27b` never took it. `gemma4:e4b` and `granite4.1:8b` took it every time, with the catalogue and without: that is all of the first one's critical failures and all but one of the second's. PiRick leaves out results that are programs, but an advert named like a copy is the model's to refuse. If your indexers are public ones, where such things are common, use one of the first three.
+- **Two of the small models cannot tell an advert from a film.** One search in the comparison returns, as its best-shared result, an advert named like a 1080p copy of the film. `gemma4:12b`, `ornith:9b` and `qwen3.8:27b` never took it. `gemma4:e4b` and `granite4.1:8b` took it every time, with the catalogue and without: that is all of the first one's critical failures and all but one of the second's. PiRick leaves out results that are programs, and removes a download that turns out to hold one, but an advert named like a copy that holds a video is the model's to refuse. If your indexers are public ones, where such things are common, use one of the first three.
 - **The catalogue helps most where the model is weakest.** Thirteen of the requests are made both ways, in the same words. Without the catalogue `gemma4:e4b` got 80% of those right, `ornith:9b` 75% and `granite4.1:8b` 71%. With it they got 92%, 97% and 92%. `gemma4:12b`, with little to gain, went from 100% to 98%. Every model also made fewer searches, by about a fifth to a third. What the small models got wrong without it was the latest season of a show, the sequel to a film, a show kept under another of its names, and saying which episodes of a season could not be found.
 - **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by half or more. On the requests made with the catalogue it cost little: `gemma4:12b` stayed at 99% and `gemma4:e4b` went from 97% to 93%. On the rest it cost a good deal: `gemma4:12b` fell from 99% to 88% and `gemma4:e4b` from 89% to 73%, and without thinking `gemma4:12b` said it had started two seasons when it had fetched one. People ask for more than the catalogue covers, so the saving is not worth it.
 - **Except for the welcome-back message, which PiRick always has written without thinking.** Given the chance, `gemma4:12b` and `ornith:9b` thought for half a minute to nearly two over five sentences, and now and then `gemma4:12b` used up its room and wrote none. Without thinking the message comes in a second or two and says the same. Of the models that think, only `qwen3.8:27b` lost by it: it now writes a sentence or two more than it is asked to.
@@ -469,6 +528,7 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `COOKIE_SECURE` | `auto`, `true` or `false` | `auto` |
 | `SESSION_IDLE_DAYS`, `SESSION_MAX_DAYS` | Sign out after this long unused / regardless | `7`, `30` |
 | `LOG_LEVEL` | `debug`, `info`, `warn` or `error` | `info` |
+| `MEDIA_DIR`, `PUID`, `PGID`, `TZ` | For `docker-compose.full.yml` only: where films and shows are kept, who their files belong to, and the time zone. See "Starting everything at once" | none, `1000`, `1000`, `Etc/UTC` |
 
 ## Security
 
@@ -490,9 +550,9 @@ What it does not do:
 
 - No two-factor login and no self-service sign-up or password recovery. Admins reset passwords.
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
-- PiRick leaves out search results that are programs, but it does not recognise an advert or a fake that is named like an ordinary copy. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
+- PiRick leaves out search results that are programs, and removes a download that turns out to hold a program or nothing that can be played. It does not recognise an advert or a fake that holds a video of its own. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
-- `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
+- `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image. With everything run at once, `vpn.env` holds your VPN login, and the same goes for it.
 - With the catalogue on, the titles and names people ask about are sent to Wikidata, Wikipedia and TVmaze. Who asked is not.
 
 ## Managing people
@@ -569,7 +629,8 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/tools.js` | The tools the model can call: search, find a show, download (a result or a whole plan, into a library), list downloads |
 | `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
-| `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, seeing that Plex took them for the right thing, and replacing the ones that are stuck |
+| `src/upkeep.js` | The periodic looks at PiRick's downloads: looking inside each one, noticing the ones that finish, seeing that Plex took them for the right thing, and replacing fakes and the ones that are stuck |
+| `src/airing.js` | Whether an episode has aired yet, going by the catalogue |
 | `src/news.js` | What is new in PiRick, and who has still to be told. A change people would notice gets an entry here, written for them |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
 | `src/settings.js`, `src/folders.js` | Libraries, personalities and each person's choices; folder naming, matching and checks |

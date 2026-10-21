@@ -42,7 +42,9 @@ const SCHEMA = `
   -- finished ones until they are removed. "meant" is the film or show one was
   -- fetched as, when the catalogue said, and "filed" how far the check that Plex
   -- took it for the same thing has got (see upkeep.js), with what Plex had it as
-  -- in "filed_as" while a correction waits to be confirmed.
+  -- in "filed_as" while a correction waits to be confirmed. "inspected" is 0 until
+  -- the files a download holds have been looked at; one PiRick had before it
+  -- looked at files is taken as looked at.
   CREATE TABLE IF NOT EXISTS tracked_downloads (
     hash        TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -55,7 +57,8 @@ const SCHEMA = `
     searched_at INTEGER NOT NULL DEFAULT 0,
     meant       TEXT NOT NULL DEFAULT '',
     filed       TEXT NOT NULL DEFAULT '',
-    filed_as    TEXT NOT NULL DEFAULT ''
+    filed_as    TEXT NOT NULL DEFAULT '',
+    inspected   INTEGER NOT NULL DEFAULT 1
   );
 
   -- What upkeep did, for the admin screen and for telling each person on their return.
@@ -107,6 +110,7 @@ const ADDED_COLUMNS = [
   ['tracked_downloads', 'meant', "TEXT NOT NULL DEFAULT ''"],
   ['tracked_downloads', 'filed', "TEXT NOT NULL DEFAULT ''"],
   ['tracked_downloads', 'filed_as', "TEXT NOT NULL DEFAULT ''"],
+  ['tracked_downloads', 'inspected', 'INTEGER NOT NULL DEFAULT 1'],
 ];
 
 export function openDb(file) {

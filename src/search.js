@@ -14,7 +14,7 @@ const COPY_WORDS = new Set([
 ]);
 const ARTICLES = new Set(['the', 'a', 'an']);
 // A name that ends like this is a program. Offered as a film, a show, an album or a book, it is an advert or worse.
-const PROGRAM = /\.(?:exe|msi|bat|cmd|scr|apk|dmg|pkg|jar|vbs|ps1|lnk)$/i;
+export const PROGRAM = /\.(?:exe|msi|bat|cmd|scr|apk|dmg|pkg|jar|vbs|ps1|lnk)$/i;
 // Torznab's categories for console and PC games (1000, 4050) and for software (4000): there a program is what was asked for.
 const mayBePrograms = (categories) => categories.some((id) => Math.floor(id / 1000) === 1 || Math.floor(id / 1000) === 4);
 

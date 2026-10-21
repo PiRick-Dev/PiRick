@@ -24,7 +24,7 @@ export function build(config) {
   const catalogue = createCatalogue(config.catalogue);
   const conversation = createConversation(db);
   const settings = createSettings(db);
-  const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex });
+  const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex, catalogue });
   const tools = createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue });
   const news = createNews({
     db,

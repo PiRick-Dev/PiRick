@@ -1,0 +1,147 @@
+# PiRick together with everything it needs, for a machine that has none of it
+# yet: Ollama (the AI), Jackett and FlareSolverr (search), and qBittorrent
+# (downloads), whose traffic goes only through a VPN. See "Starting everything
+# at once" in the README.
+#
+#   docker compose -f docker-compose.full.yml up -d
+#
+# Settings: .env as for PiRick on its own, plus MEDIA_DIR, PUID, PGID and TZ
+# (see .env.example), and the VPN's in vpn.env (see vpn.env.example).
+services:
+  pirick:
+    image: ghcr.io/pirick-dev/pirick:latest
+    container_name: pirick
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The other services, by their names on this stack's own network. These
+      # take the place of the addresses in .env.
+      OLLAMA_URL: http://ollama:11434
+      JACKETT_URL: http://jackett:9117
+      # qBittorrent has no network of its own: it lives inside the VPN's.
+      QBIT_URL: http://vpn:8080
+    ports:
+      # Point your reverse proxy at this port. If the proxy runs on this same
+      # machine, use "127.0.0.1:8787:8080" so PiRick is only reachable through it.
+      - "8787:8080"
+    volumes:
+      - pirick-data:/data
+    extra_hosts:
+      # Lets PiRick reach a Plex server on this machine (needed on Linux).
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    # No ports: Ollama has no login of its own, so only PiRick, on this
+    # stack's network, can reach it.
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # With an NVIDIA card and the NVIDIA Container Toolkit installed, take the
+    # # off these lines so the model runs on the card. Without a card it runs on
+    # the processor, which works but is far slower. For an AMD card, use the
+    # image ollama/ollama:rocm instead, with the devices /dev/kfd and /dev/dri.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Fetches the model PiRick is set to use, the first time and after it is
+  # changed in .env, then stops. "docker compose logs -f ollama-model" shows
+  # how far it has got: several GB, once.
+  ollama-model:
+    image: ollama/ollama:latest
+    container_name: ollama-model
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-gemma4:e4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: jackett
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - jackett:/config
+    ports:
+      # Its web page, where indexers are added. Set an admin password there:
+      # Jackett has none to begin with.
+      - "9117:9117"
+
+  # Opens indexer sites that sit behind Cloudflare, for Jackett. In Jackett's
+  # settings, set its FlareSolverr API URL to http://flaresolverr:8191.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ:-Etc/UTC}
+
+  # The VPN. Everything qBittorrent sends and receives goes through it, and if
+  # the VPN is down, qBittorrent has no connection at all rather than using
+  # yours. Which provider, and the login, are in vpn.env.
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file: vpn.env
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+    ports:
+      # qBittorrent's web page, which lives inside the VPN's network.
+      - "8080:8080"
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    # No network of its own: it can only reach the internet through the VPN.
+    network_mode: "service:vpn"
+    depends_on:
+      vpn:
+        condition: service_healthy
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+      WEBUI_PORT: 8080
+    volumes:
+      - qbittorrent:/config
+      # Where films and shows are kept. Inside qBittorrent this is /media, so
+      # PiRick's libraries are /media/Movies, /media/TV and so on, and Plex
+      # watches the same folders under MEDIA_DIR.
+      - ${MEDIA_DIR:?Set MEDIA_DIR in .env to the folder films and shows are kept in}:/media
+
+volumes:
+  pirick-data:
+  ollama:
+  jackett:
+  qbittorrent:

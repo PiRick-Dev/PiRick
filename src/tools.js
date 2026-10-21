@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { notAiredYet } from './airing.js';
 import { GENRES, fame, inLatinLetters, sayDate, standing } from './catalogue.js';
 import { describeError } from './errors.js';
 import { cleanFolderName, findFolder, joinPath, splitPath, titleFromRelease, titleKey } from './folders.js';
@@ -33,6 +34,9 @@ const MAX_LISTED_DOWNLOADS = 20;
 const FILM_SEARCHES = new Set(['movie', 'anime', 'any']);
 // Searches that are for a film and nothing else, so the catalogue's word on which film is acted on.
 const SURELY_FILMS = new Set(['movie', 'anime']);
+// Searches that may be for an episode of a show.
+const SHOW_SEARCHES = new Set(['tv', 'anime', 'any']);
+const capitalised = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 // How many of a film's other names are searched for copies of it.
 const MAX_FILM_NAMES_TRIED = 2;
 const MAX_PLEX_LOOKUPS = 4;
@@ -336,6 +340,23 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       log.warn('could not ask the catalogue', { error: describeError(err) });
       return undefined;
     }
+  }
+
+  /**
+   * The search results that are copies of an episode the catalogue says has
+   * not aired, as `[{ result, show, label }]`. The catalogue keeps what it has
+   * been told for a while, so each show costs it one question however many of
+   * its episodes are among the results.
+   */
+  async function unairedAmong(results) {
+    const fakes = [];
+    for (const result of results) {
+      const parsed = parseRelease(result.title);
+      if (parsed.kind !== 'episode' && parsed.kind !== 'season') continue;
+      const early = await askCatalogue(() => notAiredYet(catalogue, result.title));
+      if (early) fakes.push({ result, show: early.show, label: early.label });
+    }
+    return fakes;
   }
 
   /** Notes that a tool result told this person something they may want to answer, during this message of theirs. */
@@ -833,6 +854,19 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
           note: 'You already ran this exact search in this turn. Use these results: call download with one of the ids, or answer the user.',
         };
       }
+      // An episode that has not aired has no real copy to search for, only fakes.
+      const early = SHOW_SEARCHES.has(mediaType) ? await askCatalogue(() => notAiredYet(catalogue, query)) : null;
+      if (early) {
+        turn.known = true;
+        turn.status(`Not searched for: ${early.label} of ${early.show} has not aired yet`, 'info');
+        const output = {
+          results: [],
+          catalogue: `${capitalised(early.label)} of ${early.show} has not aired yet.${early.due}`,
+          note: 'Nothing was searched for: a copy offered before an episode airs is a fake. Tell the user it has not aired yet, and when it is due if that is known. Do not search for it again.',
+        };
+        turn.searches.set(searchKey, output);
+        return output;
+      }
       // What the catalogue makes of it, when there is one: which film is meant, or that there is nothing to search for.
       const known = await filmAsked(user, turn, query, mediaType);
       if (known?.output) {
@@ -872,6 +906,9 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
         return { error: 'The search service is not working right now. Tell the user to try again later or let the admin know.' };
       }
 
+      // Copies of episodes still to come are fakes, whatever the search was for.
+      const fakes = SHOW_SEARCHES.has(mediaType) ? await unairedAmong(found) : [];
+      if (fakes.length) found = found.filter((result) => !fakes.some((fake) => fake.result === result));
       const shown = found.slice(0, config.searchLimit);
       const contents = shown.map((result) => parseRelease(result.title));
       // Undefined when Plex was not asked, which is not the same as Plex having nothing.
@@ -906,6 +943,15 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       if (held.length) turn.status(`Already in Plex: ${listOf(held)}`, 'info');
 
       const notes = [differentReleasesNote(query, results.map((result) => result.title))];
+      if (fakes.length) {
+        // "S03E05 and S03E04 of Tales of the Kestrel", show by show.
+        const shows = [...new Set(fakes.map((fake) => fake.show))];
+        const episodes = shows.map((show) => [...new Set(fakes.filter((fake) => fake.show === show).map((fake) => fake.label))]);
+        const which = `${fakes.length === 1 ? 'a copy' : `${fakes.length} copies`} of ${listOf(shows.map((show, i) => `${listOf(episodes[i])} of ${show}`))}`;
+        const several = episodes.flat().length > 1;
+        turn.status(`Left out ${which}: not aired yet`, 'info');
+        notes.push(`Left out ${which}: ${several ? 'they have' : 'it has'} not aired yet, so any copy offered is a fake.`);
+      }
       if (!exact && results.length) {
         notes.push('None of these clearly match what was searched for, so they are probably unrelated. Do not download one unless it is plainly the right thing. Otherwise search again with only the title, or ask the user to check it.');
       }
@@ -1260,6 +1306,16 @@ export function createTools({ config, jackett, qbit, settings, upkeep, plex, cat
       if (!library) {
         const names = libraries.map((entry) => `"${entry.name}"`).join(', ');
         return { ok: false, error: `Call download again with library set to one of: ${names}.` };
+      }
+      // However the copy was found, one of an episode that has not aired is a fake.
+      const early = result.plan ? null : await askCatalogue(() => notAiredYet(catalogue, result.title));
+      if (early) {
+        turn.failed = true;
+        turn.status(`Not downloaded: ${early.label} of ${early.show} has not aired yet`, 'info');
+        return {
+          ok: false,
+          error: `Nothing was downloaded: ${early.label} of ${early.show} has not aired yet, so this copy is a fake.${early.due} Tell the user it has not aired yet, and when it is due if that is known.`,
+        };
       }
       // Plex has this already. The user is told, and gets it again only by saying so in their next message.
       if (result.inPlex && !answeredAboutPlex(user, turn, result.inPlex.key)) {

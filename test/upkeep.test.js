@@ -9,7 +9,10 @@ import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { hashFromMagnet } from '../src/jackett.js';
 import { createSettings } from '../src/settings.js';
-import { createUpkeep, describeTorrent } from '../src/upkeep.js';
+import { createUpkeep, describeTorrent, wrongContents } from '../src/upkeep.js';
+import { SERVICES, catalogueStandIn } from '../bench/catalogue.js';
+import { WORLD } from '../bench/works.js';
+import { createCatalogue } from '../src/catalogue.js';
 
 const HOUR = 60 * 60 * 1000;
 const GB = 1024 ** 3;
@@ -30,13 +33,13 @@ const torrent = (name, extra = {}) => ({
 });
 
 /** Stand-ins for qBittorrent and Jackett, a controllable clock, and the upkeep built on them. */
-function setup({ torrents = [], catalog = {}, settings: initial } = {}) {
+function setup({ torrents = [], catalog = {}, settings: initial, catalogue } = {}) {
   const db = openDb(':memory:');
   const settings = createSettings(db);
   if (initial) settings.setUpkeep(initial);
   const clock = { time: Date.UTC(2026, 0, 1) };
-  const calls = { added: [], removed: [], searched: [] };
-  const state = { torrents, catalog, failAdds: false };
+  const calls = { added: [], removed: [], searched: [], listed: [] };
+  const state = { torrents, catalog, failAdds: false, failFiles: false };
 
   const qbit = {
     tagged: async () => state.torrents.map((entry) => ({ ...entry })),
@@ -50,6 +53,13 @@ function setup({ torrents = [], catalog = {}, settings: initial } = {}) {
       calls.removed.push({ hash, deleteFiles });
       state.torrents = state.torrents.filter((entry) => entry.hash !== hash);
     },
+    // What each torrent holds: its `files`, or one video under its own name.
+    async files(hash) {
+      calls.listed.push(hash);
+      if (state.failFiles) throw new Error('qBittorrent is down');
+      const entry = state.torrents.find((candidate) => candidate.hash === hash);
+      return (entry.files ?? [`${entry.name}/${entry.name}.mkv`]).map((name) => ({ name, size: 1000 }));
+    },
   };
   const jackett = {
     async search(query, categories) {
@@ -59,13 +69,17 @@ function setup({ torrents = [], catalog = {}, settings: initial } = {}) {
     },
     resolve: async (release) => ({ magnet: `magnet:?xt=urn:btih:${release.infoHash}`, name: release.title }),
   };
-  const upkeep = createUpkeep({ db, qbit, jackett, settings, config: loadConfig({}), now: () => clock.time });
+  const upkeep = createUpkeep({ db, qbit, jackett, settings, config: loadConfig({}), catalogue, now: () => clock.time });
   const run = async (hoursLater = 0) => {
     clock.time += hoursLater * HOUR;
     return upkeep.runOnce();
   };
+  const look = async (minutesLater = 1) => {
+    clock.time += minutesLater * 60 * 1000;
+    return upkeep.look();
+  };
   const actions = () => upkeep.recent().reverse().map((entry) => entry.action);
-  return { db, upkeep, settings, state, calls, clock, run, actions };
+  return { db, upkeep, settings, state, calls, clock, run, look, actions };
 }
 
 test('torrents are described by what they are', () => {
@@ -236,6 +250,119 @@ test('things PiRick cannot identify, and broken torrents, are flagged but left a
   assert.deepEqual([...upkeep.stuckHashes()], [album.hash], 'a broken torrent is a different problem, not "stuck"');
 });
 
+test('what a download holds is judged by the kinds of file in it, and none of their names is repeated', () => {
+  const files = (...names) => names.map((name) => ({ name }));
+  assert.equal(wrongContents(files('Show.S01E03.1080p/Show.S01E03.1080p.mkv', 'Show.S01E03.1080p/Show.S01E03.1080p.nfo', 'Show.S01E03.1080p/Sample/sample.mkv')), null);
+  assert.deepEqual(wrongContents(files('Show.S01E03.1080p/Show.S01E03.1080p.mkv', 'Show.S01E03.1080p/Codec Setup.exe')), { reason: 'program', kind: 'a file ending in .exe' });
+  assert.deepEqual(wrongContents(files('Show.S01E03.1080p/Show.S01E03.1080p.mp4.lnk')), { reason: 'program', kind: 'a file ending in .lnk' });
+  // Locked away in an archive, or only words and pictures: nothing that can be played.
+  assert.deepEqual(wrongContents(files('Brindle.2021/Brindle.2021.rar', 'Brindle.2021/Brindle.2021.r00', 'Brindle.2021/Password.txt')), { reason: 'nothing', kind: 'archives' });
+  assert.deepEqual(wrongContents(files('Brindle.2021/Brindle.2021.txt', 'Brindle.2021/cover.jpg')), { reason: 'nothing', kind: 'files that are not videos' });
+  // A disc and its folders are no fake, whatever Plex makes of them.
+  assert.equal(wrongContents(files('Brindle.2021/Brindle.2021.iso')), null);
+  assert.equal(wrongContents(files('Brindle.2021/BDMV/STREAM/00001.m2ts', 'Brindle.2021/BDMV/index.bdmv')), null);
+  assert.equal(wrongContents([]), null, 'nothing known is nothing wrong');
+});
+
+/** The benchmark's catalogue, in which season 3 of "Tales of the Kestrel" has aired as far as episode 3 of 8. */
+const catalogueOfWorld = () => createCatalogue({ enabled: true, ...SERVICES, timeoutMs: 5000 }, { fetch: catalogueStandIn(WORLD).fetch });
+
+test('a film or an episode that turns out to hold a program is removed with its files, and another copy fetched', async () => {
+  const fake = torrent('Show.S01E03.1080p.WEB-GRP', { state: 'downloading', save_path: '/media/TV/Show', tags: 'pirick, pirick-alice', files: ['Show.S01E03.1080p.WEB-GRP/Show.S01E03.1080p.WEB-GRP.exe', 'Show.S01E03.1080p.WEB-GRP/Readme.txt'] });
+  const { db, upkeep, state, calls, look, actions } = setup({ torrents: [fake], catalog: { 'Show S01E03': [['Show.S01E03.1080p.WEB-GRP', 50], ['Show.S01E03.1080p.BluRay', 8]] } });
+  // What the download tool does the moment qBittorrent accepts a torrent.
+  const meant = { kind: 'show', title: 'Show', year: 2019, imdb: 'tt0002019' };
+  upkeep.track({ hash: fake.hash, name: fake.name, username: 'alice', meant });
+  await look();
+
+  assert.deepEqual(calls.removed, [{ hash: fake.hash, deleteFiles: true }], 'gone, with its files');
+  // The fake itself is not fetched again: its copy in the search results is passed over.
+  assert.deepEqual(calls.added.map((item) => [item.name, item.savePath, item.tags]), [['Show.S01E03.1080p.BluRay', '/media/TV/Show', ['pirick', 'pirick-alice']]]);
+  assert.deepEqual(actions(), ['removed']);
+  assert.equal(
+    upkeep.unseen('alice')[0].detail,
+    '“Show (S01E03)” was not what its name said: it held a program (a file ending in .exe), not a video. It was removed with its files, and another copy (“Show.S01E03.1080p.BluRay”) is being fetched instead.',
+  );
+  // The copy fetched instead is watched as the fake was, and looked inside in its turn.
+  const [replacement] = state.torrents;
+  assert.deepEqual(JSON.parse(db.prepare('SELECT meant FROM tracked_downloads WHERE hash = ?').get(replacement.hash).meant), meant);
+  await look();
+  assert.equal(calls.listed.at(-1), replacement.hash);
+  await look();
+  await look(60);
+  assert.equal(calls.removed.length, 1, 'it holds a video and stays');
+  assert.equal(calls.listed.filter((hash) => hash === replacement.hash).length, 1, 'and is looked inside once');
+});
+
+test('a fake is looked inside before it can be announced, and only what should hold a video is judged', async () => {
+  // Small enough to have finished before the first look.
+  const quick = torrent('Brindle.2021.1080p.WEB-DL.x264-GRP', { progress: 1, state: 'uploading', save_path: '/media/Movies', files: ['Brindle.2021.1080p.WEB-DL.x264-GRP/Brindle.2021.rar', 'Brindle.2021.1080p.WEB-DL.x264-GRP/Password.txt'] });
+  // Not judged: an album with a program in it may be one, and what else may come with a program cannot be told from its name.
+  const album = torrent('Artist - Album [FLAC]', { state: 'downloading', save_path: '/media/Music', files: ['Artist - Album [FLAC]/01.flac', 'Artist - Album [FLAC]/setup.exe'] });
+  const fine = torrent('Show.S01E04.1080p.WEB-GRP', { state: 'downloading' });
+  // Still fetching what it is, so its files are not known yet.
+  const magnet = torrent('Show.S01E05.1080p.WEB-GRP', { state: 'metaDL', files: [] });
+  const { upkeep, state, calls, look } = setup({ torrents: [quick, album, fine, magnet] });
+  for (const entry of [quick, album, fine, magnet]) upkeep.track({ hash: entry.hash, name: entry.name, username: 'alice' });
+  await look();
+
+  assert.deepEqual(calls.removed.map((entry) => entry.hash), [quick.hash]);
+  // Told as a fake, not as finished.
+  assert.deepEqual(upkeep.recent().map((entry) => entry.action), ['removed']);
+  assert.match(upkeep.unseen('alice')[0].detail, /^“Brindle \(2021\)” was not what its name said: it held nothing that can be played, only archives\. It was removed with its files, and no other copy could be found\.$/);
+  assert.ok(calls.searched.length && calls.searched.every((query) => query.toLowerCase().startsWith('brindle 2021')), 'another copy was looked for');
+  assert.deepEqual(new Set(calls.listed), new Set([quick.hash, fine.hash]), 'an album, and a magnet that has no files yet, are not asked about');
+
+  // The magnet's files arrive, but qBittorrent cannot be reached for a look: it waits for the next.
+  Object.assign(state.torrents.find((entry) => entry.hash === magnet.hash), { state: 'downloading', files: undefined });
+  state.failFiles = true;
+  await look();
+  state.failFiles = false;
+  await look();
+  assert.equal(calls.listed.filter((hash) => hash === magnet.hash).length, 2);
+  await look();
+  assert.equal(calls.listed.filter((hash) => hash === magnet.hash).length, 2, 'once it has been looked inside, that is the end of it');
+  assert.equal(calls.removed.length, 1);
+});
+
+test('a fake of an episode that has not aired is not replaced, and neither is one replaced three times already', async () => {
+  const early = torrent('Tales.of.the.Kestrel.S03E05.1080p.WEB.H264-GRP', { state: 'downloading', save_path: '/media/TV/Tales of the Kestrel', files: ['Tales.of.the.Kestrel.S03E05.1080p.WEB.H264-GRP.exe'] });
+  const { upkeep, calls, look } = setup({ torrents: [early], catalogue: catalogueOfWorld(), catalog: { 'Tales of the Kestrel S03E05': [['Tales.of.the.Kestrel.S03E05.720p.WEB.H264-GRP', 99]] } });
+  upkeep.track({ hash: early.hash, name: early.name, username: 'alice' });
+  await look();
+  assert.equal(calls.removed.length, 1);
+  assert.deepEqual([calls.searched, calls.added], [[], []], 'every copy of it is a fake');
+  assert.match(upkeep.unseen('alice')[0].detail, /It was removed with its files\. It has not aired yet, so no other copy was looked for: anything offered before it airs is a fake\./);
+
+  const tired = torrent('Show.S01E06.1080p.WEB-GRP', { state: 'downloading', save_path: '/media/TV/Show', files: ['Show.S01E06.zip'] });
+  const third = setup({ torrents: [tired], catalog: { 'Show S01E06': [['Show.S01E06.1080p.BluRay', 8]] } });
+  third.db.prepare("INSERT INTO tracked_downloads (hash, name, username, progress_at, attempts, inspected) VALUES (?, ?, 'alice', 0, 3, 0)").run(tired.hash, tired.name);
+  await third.look();
+  assert.deepEqual([third.calls.removed.length, third.calls.added.length], [1, 0]);
+  assert.match(third.upkeep.unseen('alice')[0].detail, /It had already been replaced 3 times, so it needs a person to look at it\.$/);
+});
+
+test('a stuck episode that has not aired is not replaced either', async () => {
+  const early = torrent('Tales.of.the.Kestrel.S03E06.1080p.WEB.H264-GRP', { save_path: '/media/TV/Tales of the Kestrel' });
+  const { upkeep, calls, run, actions } = setup({ torrents: [early], catalogue: catalogueOfWorld(), catalog: { 'Tales of the Kestrel S03E06': [['Tales.of.the.Kestrel.S03E06.720p.WEB.H264-GRP', 99]] } });
+  await run();
+  await run(7);
+  await run(30);
+  assert.deepEqual([calls.searched, calls.added, calls.removed], [[], [], []]);
+  assert.deepEqual(actions(), ['stuck']);
+  assert.match(upkeep.recent()[0].detail, /is stuck\. It has not aired yet, so no other copy was looked for/);
+});
+
+test('downloads PiRick had before it looked at files are not looked inside afterwards', async () => {
+  const old = torrent('Show.S01E07.1080p.WEB-GRP', { state: 'downloading', files: ['Show.S01E07.exe'] });
+  const { db, calls, look } = setup({ torrents: [old] });
+  // As an earlier PiRick left its row, before there was anything to say whether it had been looked inside.
+  db.prepare("INSERT INTO tracked_downloads (hash, name, username, progress_at) VALUES (?, ?, 'alice', 0)").run(old.hash, old.name);
+  await look();
+  await look();
+  assert.deepEqual([calls.listed, calls.removed], [[], []]);
+});
+
 test('a replacement is remembered as what the stuck download was fetched as', async () => {
   const dead = torrent('Show.S01E03.1080p.WEB-GRP');
   const { db, upkeep, state, run } = setup({ torrents: [dead], catalog: { 'Show S01E03': [['Show.S01E03.1080p.BluRay', 8]] } });
@@ -267,7 +394,7 @@ test('a database from before PiRick remembered such things gains what it needs, 
     for (let opened = 0; opened < 2; opened++) {
       const db = openDb(file);
       const [row] = db.prepare('SELECT * FROM tracked_downloads').all();
-      assert.deepEqual({ ...row }, { hash: 'a'.repeat(40), name: 'Show.S01E01.1080p', username: 'alice', completed: 0, progress_at: 1, status: 'in-plex', attempts: 0, tried: '[]', searched_at: 0, meant: '', filed: '', filed_as: '' });
+      assert.deepEqual({ ...row }, { hash: 'a'.repeat(40), name: 'Show.S01E01.1080p', username: 'alice', completed: 0, progress_at: 1, status: 'in-plex', attempts: 0, tried: '[]', searched_at: 0, meant: '', filed: '', filed_as: '', inspected: 1 });
       db.close();
     }
   } finally {
