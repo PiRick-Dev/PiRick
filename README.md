@@ -125,7 +125,7 @@ Indexers match release names literally, and they are not careful with numbers. A
 - **Extra words dropped.** Release names do not contain cast or crew. The model is told to search by title and year alone; if a search with extra words after the year still finds nothing, PiRick retries without them.
 - **Plain letters.** Release names are written without accents, and not every indexer takes "é" for "e". A title with accents is searched for without them, and as it was written only if that finds nothing.
 
-**Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. An advert that is named like an ordinary copy cannot be told by a rule like this. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
+**Programs are left out.** A result whose name ends like a program's (`.exe`, `.msi`, `.bat` and the like) is not a film, a show, an album or a book, whatever the rest of its name says. PiRick drops it before the AI model or the whole-show planner can pick it, and keeps it only when a game or software is searched for. A fake named like an ordinary copy is caught a little later, once qBittorrent knows its files: one that holds a program, or nothing that can be played, is removed and replaced (see "Upkeep"). An advert that holds a video of its own cannot be told that way. Leaving it alone is up to the AI model, and not every model does: see "Choosing a model".
 
 Searches run one at a time, and a further spelling is only tried when the one before was not enough. This matters when indexers sit behind a Cloudflare solver such as FlareSolverr: each search then takes 10 to 20 seconds, and several sent at once come back with far fewer results, sometimes none. If your indexers are fast and direct, `JACKETT_SEARCHES_AT_ONCE` lets the whole-show planner look at several seasons together.
 
@@ -160,7 +160,9 @@ Things to know:
 
 ## Upkeep: finished and stuck downloads
 
-PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does three things.
+PiRick looks after its own downloads: everything in qBittorrent tagged `pirick`. It does four things.
+
+**What is inside.** As soon as qBittorrent knows the files of a new download, which for most is within a minute of it starting, PiRick looks at them. A film or an episode that turns out to hold a program (`.exe`, `.lnk`, `.scr` and the like), or nothing that can be played, such as only `.rar` or `.zip` archives, is a fake. It is removed with its files before it can be announced as finished, and another copy is fetched in its place, which is looked at in its turn. The person who asked is told: `“Wrenfield Cross (S03E05)” was not what its name said: it held a program (a file ending in .exe), not a video. It was removed with its files, and another copy (“Wrenfield.Cross.S03E05.1080p.WEB.H264-GRP”) is being fetched instead.` No other copy is fetched of an episode that has not aired yet, since every copy of it is a fake, nor of one that has been replaced three times already. Albums, books and anything whose name does not say it is a film or a show are left as they are, and so is what PiRick had before it looked inside downloads. This part is always on.
 
 **Finished downloads.** Every minute PiRick looks for downloads that have just finished. For each one it leaves a note for the person who asked, which they get the next time they open PiRick: `“Wrenfield Cross (S03E01)” has finished downloading.` Episodes of one show that finish before the note is read are gathered into one note. With Plex connected, PiRick also asks Plex to pick the download up straight away, and the note says so. This part is always on.
 
@@ -282,6 +284,7 @@ A name that ends in what reads as a year is taken as it stands when a film or a 
 
 - A plan covers every season that has aired. A season nobody has a copy of is reported as not found, and so are single episodes: "season 3: episodes 7 and 8".
 - What has not aired yet is told apart from what could not be found. A season still being shown is fetched episode by episode.
+- An episode that has not aired yet is never fetched, however it is asked for. Searched for by its number, it is not searched for at all, copies of it are left out of every search, and one that reaches the download all the same is refused. Every such copy is a fake, and fakes are how programs get passed off as videos.
 - "The latest season" is worked out by PiRick, for one episode of it too. A season or episode that does not exist is said not to.
 - Two shows with one name are told apart by year or country before anything is searched for. Copies of the other one are then left alone: a release that gives its show another year or country, or holds a season this show does not have, is not this show. The lesser known of the two is also searched for by its year and its country, since under the bare name the better known one fills every answer. Asked for a season that only one of them has got to, PiRick takes that one and does not ask.
 - Of a show with one season, a pack of that season is all of it, whether or not it calls itself complete.
@@ -401,7 +404,7 @@ What the comparison found (October 2026, Ollama 0.35.1 and 0.40.0, a 16 GB Radeo
 
 Six things held across models:
 
-- **Two of the small models cannot tell an advert from a film.** One search in the comparison returns, as its best-shared result, an advert named like a 1080p copy of the film. `gemma4:12b`, `ornith:9b` and `qwen3.8:27b` never took it. `gemma4:e4b` and `granite4.1:8b` took it every time, with the catalogue and without: that is all of the first one's critical failures and all but one of the second's. PiRick leaves out results that are programs, but an advert named like a copy is the model's to refuse. If your indexers are public ones, where such things are common, use one of the first three.
+- **Two of the small models cannot tell an advert from a film.** One search in the comparison returns, as its best-shared result, an advert named like a 1080p copy of the film. `gemma4:12b`, `ornith:9b` and `qwen3.8:27b` never took it. `gemma4:e4b` and `granite4.1:8b` took it every time, with the catalogue and without: that is all of the first one's critical failures and all but one of the second's. PiRick leaves out results that are programs, and removes a download that turns out to hold one, but an advert named like a copy that holds a video is the model's to refuse. If your indexers are public ones, where such things are common, use one of the first three.
 - **The catalogue helps most where the model is weakest.** Thirteen of the requests are made both ways, in the same words. Without the catalogue `gemma4:e4b` got 80% of those right, `ornith:9b` 75% and `granite4.1:8b` 71%. With it they got 92%, 97% and 92%. `gemma4:12b`, with little to gain, went from 100% to 98%. Every model also made fewer searches, by about a fifth to a third. What the small models got wrong without it was the latest season of a show, the sequel to a film, a show kept under another of its names, and saying which episodes of a season could not be found.
 - **Leave thinking on.** `OLLAMA_THINK=false` cuts the wait by half or more. On the requests made with the catalogue it cost little: `gemma4:12b` stayed at 99% and `gemma4:e4b` went from 97% to 93%. On the rest it cost a good deal: `gemma4:12b` fell from 99% to 88% and `gemma4:e4b` from 89% to 73%, and without thinking `gemma4:12b` said it had started two seasons when it had fetched one. People ask for more than the catalogue covers, so the saving is not worth it.
 - **Except for the welcome-back message, which PiRick always has written without thinking.** Given the chance, `gemma4:12b` and `ornith:9b` thought for half a minute to nearly two over five sentences, and now and then `gemma4:12b` used up its room and wrote none. Without thinking the message comes in a second or two and says the same. Of the models that think, only `qwen3.8:27b` lost by it: it now writes a sentence or two more than it is asked to.
@@ -490,7 +493,7 @@ What it does not do:
 
 - No two-factor login and no self-service sign-up or password recovery. Admins reset passwords.
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
-- PiRick leaves out search results that are programs, but it does not recognise an advert or a fake that is named like an ordinary copy. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
+- PiRick leaves out search results that are programs, and removes a download that turns out to hold a program or nothing that can be played. It does not recognise an advert or a fake that holds a video of its own. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
 - `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
 - With the catalogue on, the titles and names people ask about are sent to Wikidata, Wikipedia and TVmaze. Who asked is not.
@@ -569,7 +572,8 @@ Work happens on the `dev` branch. `main` is what the published image is built fr
 | `src/tools.js` | The tools the model can call: search, find a show, download (a result or a whole plan, into a library), list downloads |
 | `src/search.js`, `src/words.js` | Searching under other spellings of a title and keeping only relevant results |
 | `src/releases.js`, `src/torrentfile.js` | Reading release names, planning the fewest downloads for a show; torrent file identity |
-| `src/upkeep.js` | The periodic looks at PiRick's downloads: noticing the ones that finish, seeing that Plex took them for the right thing, and replacing the ones that are stuck |
+| `src/upkeep.js` | The periodic looks at PiRick's downloads: looking inside each one, noticing the ones that finish, seeing that Plex took them for the right thing, and replacing fakes and the ones that are stuck |
+| `src/airing.js` | Whether an episode has aired yet, going by the catalogue |
 | `src/news.js` | What is new in PiRick, and who has still to be told. A change people would notice gets an entry here, written for them |
 | `src/ollama.js`, `src/jackett.js`, `src/qbittorrent.js`, `src/plex.js` | Clients for the four services |
 | `src/settings.js`, `src/folders.js` | Libraries, personalities and each person's choices; folder naming, matching and checks |

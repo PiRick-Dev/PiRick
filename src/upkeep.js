@@ -2,8 +2,12 @@
 // stopped making progress and replaces them with another copy, and notices the
 // ones that finish, so Plex can be asked to pick them up and whoever asked can
 // be told. It then sees that Plex took each for the film or show it was fetched
-// as, and tells it when it did not. Runs unattended, so everything here follows
-// fixed rules; no language model is involved.
+// as, and tells it when it did not. And it looks inside each one as soon as
+// qBittorrent knows its files: a film or an episode that turns out to hold a
+// program, or nothing that can be played, is a fake, and is replaced. Runs
+// unattended, so everything here follows fixed rules; no language model is
+// involved.
+import { notAiredYet } from './airing.js';
 import { describeError } from './errors.js';
 import { joinPath, pathBelow, titleKey } from './folders.js';
 import { hashFromMagnet } from './jackett.js';
@@ -11,7 +15,7 @@ import { log } from './log.js';
 import { matchLibrary, plexPath } from './plex.js';
 import { BASE_TAG } from './qbittorrent.js';
 import { best, describeContents, parseRelease, planShow } from './releases.js';
-import { createFinder } from './search.js';
+import { PROGRAM, createFinder } from './search.js';
 import { infoHashOf } from './torrentfile.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -56,11 +60,36 @@ const MAX_FILED_LOOKS = 30;
 const MAX_CONFIRM_LOOKS = 3;
 // What Plex calls the kinds of thing PiRick fetches.
 const PLEX_KINDS = { film: 'movie', show: 'show' };
+// Looking inside a download is one request, so a great many at once take turns.
+const MAX_INSPECTIONS = 20;
+// States in which qBittorrent does not know a torrent's files yet.
+const NO_FILES_YET = new Set(['metaDL', 'forcedMetaDL']);
+// What a film or an episode is in. Disc images and their folders count: Plex may not play them all, but they are no fakes.
+const VIDEO = /\.(?:mkv|mp4|m4v|avi|mov|wmv|mpg|mpeg|ts|m2ts|mts|webm|flv|ogv|vob|iso)$/i;
+const ARCHIVE = /\.(?:rar|r\d{2}|zip|7z|tar|gz)$/i;
+// The kinds of release a film or an episode is: only of those is it known what the files should be.
+const PLAYABLE_KINDS = new Set(['movie', 'episode', 'season', 'seasons', 'series', 'part']);
 const LOOSE_FILE = /\.(?:mkv|mp4|m4v|avi|mov|wmv|mpg|mpeg|ts|m2ts|webm|flac|mp3|m4a|m4b|ogg|opus|wav|epub|pdf|mobi|azw3|cbz|cbr|iso)$/i;
 
 const pad = (number) => String(number).padStart(2, '0');
 const tagsOf = (torrent) => String(torrent.tags ?? '').split(',').map((tag) => tag.trim()).filter(Boolean);
 const usernameOf = (torrent) => tagsOf(torrent).find((tag) => tag.startsWith(USER_TAG))?.slice(USER_TAG.length) ?? '';
+
+/**
+ * What is wrong with what a film or an episode turned out to hold, going by its
+ * files (`[{ name }]`, as qBittorrent lists them): `{ reason: 'program' | 'nothing',
+ * kind }`, where `kind` says what type of file it was ("a file ending in .exe", "archives"),
+ * or null when nothing is. Only types are named, never the files' own names,
+ * which whoever made the fake chose and which are retold by the model.
+ */
+export function wrongContents(files) {
+  const names = files.map((file) => String(file.name ?? '').trim()).filter(Boolean);
+  if (!names.length) return null;
+  const program = names.find((name) => PROGRAM.test(name));
+  if (program) return { reason: 'program', kind: `a file ending in .${program.split('.').pop().toLowerCase()}` };
+  if (names.some((name) => VIDEO.test(name))) return null;
+  return { reason: 'nothing', kind: names.some((name) => ARCHIVE.test(name)) ? 'archives' : 'files that are not videos' };
+}
 
 /** A readable name for a torrent: "Pioneer One (S01E05)" rather than its release name. */
 export function describeTorrent(name) {
@@ -70,15 +99,17 @@ export function describeTorrent(name) {
   return contents ? `${parsed.show} (${contents})` : parsed.show;
 }
 
-export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = Date.now }) {
+export function createUpkeep({ db, qbit, jackett, settings, config, plex, catalogue, now = Date.now }) {
   const q = {
     get: db.prepare('SELECT * FROM tracked_downloads WHERE hash = ?'),
     all: db.prepare('SELECT hash, status, progress_at FROM tracked_downloads'),
-    adopt: db.prepare('INSERT OR IGNORE INTO tracked_downloads (hash, name, username, completed, progress_at, meant) VALUES (?, ?, ?, 0, ?, ?)'),
+    adopt: db.prepare('INSERT OR IGNORE INTO tracked_downloads (hash, name, username, completed, progress_at, meant, inspected) VALUES (?, ?, ?, 0, ?, ?, 0)'),
     mean: db.prepare("UPDATE tracked_downloads SET meant = ? WHERE hash = ? AND meant = ''"),
     insert: db.prepare(`
-      INSERT OR REPLACE INTO tracked_downloads (hash, name, username, completed, progress_at, status, attempts, tried, searched_at, meant)
-      VALUES (?, ?, ?, ?, ?, 'watching', ?, ?, 0, ?)`),
+      INSERT OR REPLACE INTO tracked_downloads (hash, name, username, completed, progress_at, status, attempts, tried, searched_at, meant, inspected)
+      VALUES (?, ?, ?, ?, ?, 'watching', ?, ?, 0, ?, 0)`),
+    uninspected: db.prepare('SELECT * FROM tracked_downloads WHERE inspected = 0 ORDER BY progress_at'),
+    inspected: db.prepare('UPDATE tracked_downloads SET inspected = 1 WHERE hash = ?'),
     unfiled: db.prepare("SELECT * FROM tracked_downloads WHERE status = 'in-plex' AND meant != '' AND filed IN ('', 'asked') ORDER BY progress_at"),
     meaning: db.prepare("SELECT hash, meant, filed FROM tracked_downloads WHERE meant != ''"),
     filed: db.prepare('UPDATE tracked_downloads SET filed = ?, filed_as = ? WHERE hash = ?'),
@@ -382,6 +413,117 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     if (!trouble) filingFailing = false;
   }
 
+  /**
+   * Looks inside each download that has not been looked inside yet, once
+   * qBittorrent knows its files. A film or an episode that turns out to hold a
+   * program, or nothing that can be played, is removed with its files and
+   * another copy is fetched in its place. Resolves to the torrents that are
+   * left, for the rest of the look to go on with.
+   */
+  async function inspect(torrents) {
+    const present = new Map(torrents.map((torrent) => [torrent.hash, torrent]));
+    const removed = new Set();
+    let looked = 0;
+    for (const row of q.uninspected.all()) {
+      const torrent = present.get(row.hash);
+      if (!torrent || NO_FILES_YET.has(torrent.state)) continue;
+      // Only of a film or an episode is it known what it should hold. An album, a book or a program is left as it is.
+      if (!row.meant && !PLAYABLE_KINDS.has(parseRelease(torrent.name).kind)) {
+        q.inspected.run(row.hash);
+        continue;
+      }
+      if (looked >= MAX_INSPECTIONS) break;
+      looked += 1;
+      try {
+        const files = await qbit.files(torrent.hash);
+        // qBittorrent has not listed them yet.
+        if (!files.length) continue;
+        const wrong = wrongContents(files);
+        if (wrong) {
+          await refuse(torrent, row, wrong);
+          removed.add(torrent.hash);
+        } else {
+          q.inspected.run(row.hash);
+        }
+      } catch (err) {
+        // Looked at again next time, so that nothing goes unchecked for a hiccup.
+        log.warn('upkeep: could not look inside a download, will try again', { title: torrent.name, error: describeError(err) });
+      }
+    }
+    return removed.size ? torrents.filter((torrent) => !removed.has(torrent.hash)) : torrents;
+  }
+
+  /** Removes a download that is not what its name says, fetches another copy in its place, and says so. */
+  async function refuse(torrent, row, wrong) {
+    // Gone first, with its files: whatever it is, it should not stay where Plex and people will find it.
+    await qbit.remove(torrent.hash, true);
+    q.remove.run(torrent.hash);
+    const held = wrong.reason === 'program' ? `it held a program (${wrong.kind}), not a video` : `it held nothing that can be played, only ${wrong.kind}`;
+    note(row.username, 'removed', `“${describeTorrent(torrent.name)}” was not what its name said: ${held}. It was removed with its files${await fetchInstead(torrent, row)}`);
+  }
+
+  /** Fetches another copy in place of one that was removed, and says how that went, as the end of a sentence. */
+  async function fetchInstead(torrent, row) {
+    try {
+      const early = await notAiredYet(catalogue, torrent.name);
+      if (early) return `. It has not aired yet, so no other copy was looked for: anything offered before it airs is a fake.${early.due}`;
+    } catch (err) {
+      // Without the catalogue's word, another copy is looked for as it would be without a catalogue.
+      log.warn('upkeep: could not ask the catalogue whether an episode has aired', { title: torrent.name, error: describeError(err) });
+    }
+    if (row.attempts >= MAX_REPLACEMENTS) return `. It had already been replaced ${MAX_REPLACEMENTS} times, so it needs a person to look at it.`;
+    if (!torrent.save_path) return '.';
+    const tried = new Set([...JSON.parse(row.tried), torrent.hash, torrent.name]);
+    let releases;
+    try {
+      releases = await alternatives(torrent, tried);
+    } catch (err) {
+      log.warn('upkeep: could not look for another copy', { title: torrent.name, error: describeError(err) });
+      return ', and another copy could not be looked for just now.';
+    }
+    if (releases === null) return ', and its name does not say clearly enough what it is to look for another copy.';
+    if (releases.length > MAX_REPLACEMENT_TORRENTS) return `, and another copy would take ${releases.length} separate downloads, so that is left for a person to decide.`;
+    const { added } = await addInstead(torrent, releases, tried);
+    if (!added.length) return ', and no other copy could be found.';
+    adopt(added, row, tried);
+    return added.length === 1 ? `, and another copy (“${added[0].title}”) is being fetched instead.` : `, and ${added.length} other downloads that cover the same thing are being fetched instead.`;
+  }
+
+  /**
+   * Hands qBittorrent the copies that are to take a download's place, in its
+   * folder and with its tags, leaving out any it has or that were tried before.
+   * Resolves to those added, as `{ title, hash }`, and how many could not be.
+   */
+  async function addInstead(torrent, releases, tried) {
+    // Same folder, category and tags, so the new copy lands where the old one was heading.
+    const target = { category: torrent.category, savePath: torrent.save_path, tags: tagsOf(torrent) };
+    const added = [];
+    let errors = 0;
+    for (const release of releases) {
+      try {
+        let hash = release.infoHash;
+        if (hash && (await qbit.find(hash))) continue;
+        const source = await jackett.resolve(release);
+        hash ??= source.magnet ? hashFromMagnet(source.magnet) : infoHashOf(source.file);
+        if (hash && (tried.has(hash) || (await qbit.find(hash)))) continue;
+        await qbit.add({ ...source, ...target });
+        added.push({ title: release.title, hash });
+      } catch (err) {
+        errors += 1;
+        log.warn('upkeep: could not add a replacement', { title: release.title, error: describeError(err) });
+      }
+    }
+    return { added, errors };
+  }
+
+  /** Watches the copies added in place of a download as it was watched: for the same person, fetched as the same thing. */
+  function adopt(added, row, tried, time = now()) {
+    const chain = JSON.stringify([...tried].slice(-TRIED_KEEP));
+    for (const { title, hash } of added) {
+      if (hash) q.insert.run(hash, title, row.username, 0, time, row.attempts + 1, chain, row.meant);
+    }
+  }
+
   /** Forgets torrents that have been removed from qBittorrent. */
   function forgetMissing(torrents, time) {
     const present = new Set(torrents.map((torrent) => torrent.hash));
@@ -400,7 +542,8 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     running = true;
     try {
       const time = now();
-      const torrents = await qbit.tagged(BASE_TAG);
+      // A fake is dealt with before anything else: it is not to be announced as finished.
+      const torrents = await inspect(await qbit.tagged(BASE_TAG));
       await finishUp(torrents);
       await checkFiling(torrents);
       for (const torrent of torrents) {
@@ -488,6 +631,11 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
       return false;
     };
 
+    // A copy of an episode that has not aired is a fake, and so would any other be.
+    const early = await notAiredYet(catalogue, torrent.name).catch(() => null);
+    if (early) {
+      return giveNotice('stuck', `“${label}” is stuck. It has not aired yet, so no other copy was looked for: anything offered before it airs is a fake.${early.due}`);
+    }
     const releases = torrent.save_path ? await alternatives(torrent, tried) : null;
     if (releases === null) {
       return giveNotice('stuck', `“${torrent.name}” is stuck, and its name does not say clearly enough what it is to look for another copy.`);
@@ -496,24 +644,7 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
       return giveNotice('stuck', `“${label}” is stuck. Replacing it would take ${releases.length} separate downloads, so it was left for a person to decide.`);
     }
 
-    // Same folder, category and tags, so the new copy lands where the old one was heading.
-    const target = { category: torrent.category, savePath: torrent.save_path, tags: tagsOf(torrent) };
-    const added = [];
-    let errors = 0;
-    for (const release of releases) {
-      try {
-        let hash = release.infoHash;
-        if (hash && (await qbit.find(hash))) continue;
-        const source = await jackett.resolve(release);
-        hash ??= source.magnet ? hashFromMagnet(source.magnet) : infoHashOf(source.file);
-        if (hash && (tried.has(hash) || (await qbit.find(hash)))) continue;
-        await qbit.add({ ...source, ...target });
-        added.push({ title: release.title, hash });
-      } catch (err) {
-        errors += 1;
-        log.warn('upkeep: could not add a replacement', { title: release.title, error: describeError(err) });
-      }
-    }
+    const { added, errors } = await addInstead(torrent, releases, tried);
     // Copies exist but could not be handed over (a service hiccup): try again next check.
     if (!added.length && errors) return false;
     if (!added.length) {
@@ -523,11 +654,7 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     // Only now that qBittorrent has the new copy does the stuck one go, with its partial files.
     await qbit.remove(torrent.hash, true);
     q.remove.run(torrent.hash);
-    const chain = JSON.stringify([...tried].slice(-TRIED_KEEP));
-    for (const { title, hash } of added) {
-      // What the stuck one was fetched as, its replacement is too.
-      if (hash) q.insert.run(hash, title, row.username, 0, time, row.attempts + 1, chain, row.meant);
-    }
+    adopt(added, row, tried, time);
     // A pack that could only be replaced by single episodes may now be incomplete: say so.
     const piecemeal = parseRelease(torrent.name).kind !== 'episode' && added.every(({ title }) => parseRelease(title).kind === 'episode');
     let replacement = added.length === 1 ? `another copy (“${added[0].title}”)` : `${added.length} downloads that cover the same thing`;
@@ -547,7 +674,7 @@ export function createUpkeep({ db, qbit, jackett, settings, config, plex, now = 
     running = true;
     try {
       const time = now();
-      const torrents = await qbit.tagged(BASE_TAG);
+      const torrents = await inspect(await qbit.tagged(BASE_TAG));
       await finishUp(torrents);
       const stuck = [];
       let watching = 0;

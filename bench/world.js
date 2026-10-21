@@ -139,6 +139,12 @@ export function createWorld(setup = {}, connect, using = {}) {
     async addTags() {},
     list: async (tag) => torrents.filter((torrent) => torrent.tags.split(', ').includes(tag)).reverse().map(toDownload),
     tagged: async (tag) => torrents.filter((torrent) => torrent.tags.split(', ').includes(tag)).map((torrent) => ({ ...torrent })),
+    // What a release holds: one video under its own name, unless the indexer's entry says otherwise.
+    async files(hash) {
+      const torrent = torrents.find((entry) => entry.hash === hash);
+      if (!torrent) throw new UpstreamError('qbittorrent', 'qBittorrent returned HTTP 404 for /api/v2/torrents/files');
+      return byHash(hash)?.files ?? [{ name: `${torrent.name}/${torrent.name}.mkv`, size: torrent.size }];
+    },
     async remove(hash) {
       torrents.splice(0, torrents.length, ...torrents.filter((torrent) => torrent.hash !== hash));
     },
@@ -153,7 +159,7 @@ export function createWorld(setup = {}, connect, using = {}) {
 
   // An in-process indexer answers instantly, which the finder would otherwise take for a cached answer.
   const config = loadConfig({ JACKETT_RETRY_CACHED_EMPTY: 'false' });
-  const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex });
+  const upkeep = createUpkeep({ db, qbit, jackett, settings, config, plex, catalogue });
   const realTools = createTools({ config, jackett, qbit, settings, upkeep, plex, catalogue });
   const tools = {
     ...realTools,

@@ -9,7 +9,7 @@ const { sayDate } = await import('../src/catalogue.js');
 const { guideOf, heldAgainst, numbered, showLine } = await import('../src/lookups.js');
 const { buildPlan, lastAired, matchShow, parseRelease, planShow } = await import('../src/releases.js');
 const { talkTo } = await import('../bench/world.js');
-const { corpusOf, release: listing } = await import('../bench/corpus.js');
+const { RELEASES, corpusOf, release: listing } = await import('../bench/corpus.js');
 
 const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name, arguments: args } }] });
 const show = (args) => call('find_show', args);
@@ -159,6 +159,64 @@ test('what could not be found is told apart from what does not exist or has not 
     assert.equal(running.outputs[0].plan.seasons_not_found, undefined);
   } finally {
     chat.close();
+  }
+});
+
+test('an episode that has not aired is never fetched, however it is asked for', async () => {
+  // Beside the episodes of season 3 that have aired, the indexer offers "copies" of two still to come.
+  const fakes = ['Tales.of.the.Kestrel.S03E05.1080p.WEB.H264-GRP', 'Tales.of.the.Kestrel.S03E04.720p.WEB.H264-GRP'];
+  const chat = talkTo({ catalogue: true }, { corpus: corpusOf([...RELEASES, ...fakes.map((title) => listing(title, 900, 1.2, [5000]))]) });
+  const results = (outputs) => outputs.findLast((output) => output.results)?.results ?? [];
+  try {
+    // Searched for by its number, it is not searched for at all.
+    const asked = await chat.say('Search for Tales of the Kestrel S03E05', [call('search_media', { query: 'Tales of the Kestrel S03E05', media_type: 'tv' })], 'It has not aired yet.');
+    assert.deepEqual(asked.outputs[0], {
+      results: [],
+      catalogue: 'S03E05 of Tales of the Kestrel has not aired yet.',
+      note: 'Nothing was searched for: a copy offered before an episode airs is a fake. Tell the user it has not aired yet, and when it is due if that is known. Do not search for it again.',
+    });
+    assert.deepEqual(asked.record.statuses, ['Not searched for: S03E05 of Tales of the Kestrel has not aired yet']);
+    assert.deepEqual(chat.world.trace().searches, []);
+    // The one due next is said to be due.
+    const next = await chat.say('S03E04?', [call('search_media', { query: 'Tales of the Kestrel S03E04', media_type: 'any' })], 'Not yet.');
+    assert.equal(next.outputs[0].catalogue, `S03E04 of Tales of the Kestrel has not aired yet. It is due on ${sayDate(day(4))}.`);
+
+    // Searched for by the show's name, the copies still to come are left out, and what has aired is offered.
+    const listed = await chat.say('What is there of Tales of the Kestrel?', [call('search_media', { query: 'Tales of the Kestrel', media_type: 'tv' })], 'Here is what there is.');
+    const offered = results(listed.outputs).map((result) => result.title);
+    assert.ok(offered.includes('Tales.of.the.Kestrel.S03E03.1080p.WEB.H264-GRP'), offered.join(', '));
+    assert.deepEqual(offered.filter((title) => fakes.includes(title)), []);
+    assert.ok(listed.record.statuses.includes('Left out 2 copies of S03E05 and S03E04 of Tales of the Kestrel: not aired yet'), listed.record.statuses.join(' | '));
+    assert.match(listed.outputs[0].note, /Left out 2 copies of S03E05 and S03E04 of Tales of the Kestrel: they have not aired yet, so any copy offered is a fake\./);
+
+  } finally {
+    chat.close();
+  }
+
+  // Should a copy of one reach the download tool all the same (here because the guide could not be read
+  // at the time of the search), it is refused there.
+  const other = talkTo({ catalogue: true }, { corpus: corpusOf([...RELEASES, ...fakes.map((title) => listing(title, 900, 1.2, [5000]))]) });
+  try {
+    other.world.catalogueServices.setDown('tvmaze');
+    const slipped = await other.say(
+      'Get me S03E05 of Tales of the Kestrel please',
+      [
+        call('search_media', { query: 'Tales.of.the.Kestrel.S03E05', media_type: 'tv' }),
+        (outputs) => {
+          other.world.catalogueServices.setDown('tvmaze', false);
+          return call('download', { result_id: results(outputs).find((result) => result.title === fakes[0]).id, library: 'TV', title: 'Tales of the Kestrel', new_folder: true });
+        },
+      ],
+      'It has not aired yet, so I did not fetch it.',
+    );
+    assert.deepEqual(slipped.outputs.at(-1), {
+      ok: false,
+      error: 'Nothing was downloaded: S03E05 of Tales of the Kestrel has not aired yet, so this copy is a fake. Tell the user it has not aired yet, and when it is due if that is known.',
+    });
+    assert.equal(slipped.record.statuses.at(-1), 'Not downloaded: S03E05 of Tales of the Kestrel has not aired yet');
+    assert.deepEqual(other.world.trace().added, []);
+  } finally {
+    other.close();
   }
 });
 

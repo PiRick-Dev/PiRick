@@ -5,6 +5,7 @@ import http from 'node:http';
 import { after, before, test } from 'node:test';
 import { build } from '../src/build.js';
 import { loadConfig } from '../src/config.js';
+import { createQbittorrent } from '../src/qbittorrent.js';
 
 const MAGNET = 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Big.Buck.Bunny';
 const TORRENT_BYTES = Buffer.from('d4:infod4:name4:testee');
@@ -87,6 +88,7 @@ const seen = {
   ],
 };
 let base;
+let qbitAddress;
 let adminCookie;
 let database;
 
@@ -269,6 +271,11 @@ async function qbitHandler(req, res) {
     seen.torrents = seen.torrents.filter((torrent) => torrent.hash !== fields.hashes);
     return res.end();
   }
+  if (url.pathname === '/api/v2/torrents/files') {
+    const torrent = seen.torrents.find((entry) => entry.hash === url.searchParams.get('hash'));
+    if (!torrent) return res.writeHead(404).end('Not Found');
+    return json(res, (torrent.files ?? [`${torrent.name}.mkv`]).map((name, index) => ({ index, name, size: 1000, progress: 0, priority: 1 })));
+  }
   if (url.pathname === '/api/v2/torrents/info') {
     const hashes = url.searchParams.get('hashes');
     if (hashes === 'f'.repeat(40)) return json(res, [{ name: 'Known', progress: 1, state: 'uploading', size: 1, tags: 'pirick' }]);
@@ -323,6 +330,7 @@ before(async () => {
     listen(jackettHandler),
     listen(qbitHandler),
   ]);
+  qbitAddress = qbitUrl;
   const config = loadConfig({
     OLLAMA_URL: ollamaUrl,
     OLLAMA_MODEL: 'test-model',
@@ -832,6 +840,20 @@ test('history survives a reload and can be cleared', async () => {
 
   assert.equal((await request('/api/chat', { method: 'DELETE' })).status, 200);
   assert.deepEqual((await getJson('/api/chat')).messages, []);
+});
+
+test('what a torrent holds is read from qBittorrent, and nothing until it knows', async () => {
+  const qbit = createQbittorrent({ url: qbitAddress, username: 'qb-user', password: 'qb-pass', timeoutMs: 5000 });
+  const fake = { hash: 'a1'.repeat(20), name: 'Copperhollow.S02E05.1080p.WEB.H264-GRP', progress: 0, state: 'downloading', size: 1e9, tags: 'pirick, pirick-admin', files: ['Copperhollow.S02E05.1080p.WEB.H264-GRP/Copperhollow.S02E05.1080p.mkv.exe'] };
+  const magnet = { ...fake, hash: 'b2'.repeat(20), state: 'metaDL', files: [] };
+  seen.torrents.push(fake, magnet);
+  try {
+    assert.deepEqual(await qbit.files(fake.hash), [{ name: 'Copperhollow.S02E05.1080p.WEB.H264-GRP/Copperhollow.S02E05.1080p.mkv.exe', size: 1000 }]);
+    assert.deepEqual(await qbit.files(magnet.hash), []);
+    await assert.rejects(qbit.files('c3'.repeat(20)), { name: 'UpstreamError', message: 'qBittorrent returned HTTP 404 for /api/v2/torrents/files' });
+  } finally {
+    seen.torrents = seen.torrents.filter((torrent) => torrent !== fake && torrent !== magnet);
+  }
 });
 
 test('downloads show only your own unless an admin asks for everyone', async () => {
