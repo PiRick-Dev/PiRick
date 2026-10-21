@@ -11,3 +11,6 @@ docker-compose.build.yml
 .github
 bench
 docs
+vpn.env
+vpn.env.example
+docker-compose.full.yml

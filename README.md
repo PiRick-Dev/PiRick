@@ -32,7 +32,7 @@ Each person can pick another theme, and have it light or dark whatever their dev
 
 ## Quick start
 
-You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere PiRick can reach.
+You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere PiRick can reach. If you have none of those yet, "Starting everything at once" below runs them all beside PiRick, with qBittorrent behind a VPN.
 
 1. Put `docker-compose.yml` and `.env.example` from this repository in a folder (clone it, or download just those two files). Copy the example settings and fill them in:
 
@@ -59,6 +59,62 @@ You need Docker, plus Ollama, Jackett and qBittorrent already running somewhere 
 5. Open **Admin > Libraries** and add the folders downloads should go into, for example Movies, TV and Anime. PiRick refuses to download until at least one exists. See "Libraries" below.
 
 6. Change your password under **Account**, then add the people who should have access under **Admin > People**.
+
+## Starting everything at once
+
+If you have no Ollama, Jackett or qBittorrent yet, `docker-compose.full.yml` runs all of them beside PiRick on one machine:
+
+| Service | What it does | Where you reach it |
+|---|---|---|
+| PiRick | This app | `http://<this-machine>:8787` |
+| Ollama | The AI model, which is fetched on the first start | Nowhere: only PiRick can |
+| Jackett, with FlareSolverr | Searches your indexers. FlareSolverr opens sites that sit behind Cloudflare | `http://<this-machine>:9117` |
+| qBittorrent, inside a VPN | Downloads, with all of its traffic going through the VPN | `http://<this-machine>:8080` |
+
+Plex is not part of it. Point Plex's libraries at the folders the downloads go into, wherever Plex runs.
+
+**About the VPN.** While qBittorrent downloads something, everyone else sharing the same file can see the internet address it comes from. In this stack qBittorrent has no network connection of its own. It lives inside a VPN container, [gluetun](https://github.com/qdm12/gluetun), so everything it sends and receives goes through the VPN, and if the VPN drops, qBittorrent is cut off instead of falling back to your own connection. The other services use your connection as usual, so the indexer sites see your address when Jackett searches them.
+
+- You need an account with a VPN provider that allows BitTorrent. gluetun knows most providers, and [its wiki](https://github.com/qdm12/gluetun-wiki/tree/main/setup/providers) says what each one needs.
+- WireGuard is faster than OpenVPN, where the provider offers it.
+- A VPN keeps your address from the people you download from and share with. It does not change what you are allowed to download where you live.
+
+**Setting it up.**
+
+1. Put `docker-compose.full.yml`, `.env.example` and `vpn.env.example` from this repository in a folder, and copy the two examples:
+
+   ```
+   cp .env.example .env
+   cp vpn.env.example vpn.env
+   ```
+
+2. In `vpn.env`, fill in your VPN provider and its login. Only the VPN container reads this file, and git leaves it out.
+3. In `.env`, set `MEDIA_DIR` to the folder your films and shows are to be kept in, `PUID` and `PGID` to what `id -u` and `id -g` print, and `TZ` to your time zone. Leave the three service addresses as they are: the compose file sets them. Make a folder for each kind of thing under `MEDIA_DIR`, for example `mkdir -p /srv/media/Movies /srv/media/TV /srv/media/Anime`.
+4. Start it:
+
+   ```
+   docker compose -f docker-compose.full.yml up -d
+   ```
+
+   The first start downloads the images and the AI model, several GB in all. `docker compose -f docker-compose.full.yml logs -f ollama-model` shows how far the model has got.
+5. Check the VPN before anything else. Its log says which address it goes out from, and that must be the VPN's, not your own:
+
+   ```
+   docker compose -f docker-compose.full.yml logs vpn
+   ```
+
+   Look for the line `Public IP address is …`. If there is none, the VPN has not connected, and the lines before say why. qBittorrent waits for the VPN, so it does not start until the VPN is up.
+6. Open qBittorrent at `http://<this-machine>:8080` and sign in as `admin` with the temporary password that `docker compose -f docker-compose.full.yml logs qbittorrent` shows. Set a password of your own under **Tools > Options > Web UI**, and put it in `.env` as `QBIT_PASSWORD`, with `QBIT_USERNAME=admin`.
+7. Open Jackett at `http://<this-machine>:9117`. Set an admin password at the bottom of the page, since it has none to begin with, and add your indexers. For sites behind Cloudflare, set **FlareSolverr API URL** to `http://flaresolverr:8191`. Copy the API key from the top right into `.env` as `JACKETT_API_KEY`.
+8. Run `docker compose -f docker-compose.full.yml up -d` again so PiRick picks the settings up, and carry on from step 3 of the Quick start. The libraries' folders are `/media/Movies`, `/media/TV` and `/media/Anime`: the folders under `MEDIA_DIR`, as qBittorrent sees them.
+
+Things to know:
+
+- Ollama runs on the processor unless it is given the graphics card. `docker-compose.full.yml` says how, for NVIDIA and for AMD. On the processor a reply can take a minute or more; see "Choosing a model" for smaller models.
+- Ollama has no login, so its port is not published at all. The pages of Jackett and qBittorrent are published on your network so you can set them up: keep them off the internet.
+- To send Jackett's searches through the VPN as well, put Jackett and FlareSolverr behind it the way qBittorrent is. gluetun's wiki shows how.
+- Some providers let other peers reach you through the VPN, which finds more people to download from. `vpn.env` says where to switch it on. Downloads work without it.
+- Updating is `docker compose -f docker-compose.full.yml pull`, then `docker compose -f docker-compose.full.yml up -d`.
 
 ## Reaching your other services
 
@@ -472,6 +528,7 @@ Connection settings are environment variables in `.env`. Restart with `docker co
 | `COOKIE_SECURE` | `auto`, `true` or `false` | `auto` |
 | `SESSION_IDLE_DAYS`, `SESSION_MAX_DAYS` | Sign out after this long unused / regardless | `7`, `30` |
 | `LOG_LEVEL` | `debug`, `info`, `warn` or `error` | `info` |
+| `MEDIA_DIR`, `PUID`, `PGID`, `TZ` | For `docker-compose.full.yml` only: where films and shows are kept, who their files belong to, and the time zone. See "Starting everything at once" | none, `1000`, `1000`, `Etc/UTC` |
 
 ## Security
 
@@ -495,7 +552,7 @@ What it does not do:
 - Anyone with an account can add downloads. Use `MAX_TORRENT_SIZE_GB` if disk space is a concern.
 - PiRick leaves out search results that are programs, and removes a download that turns out to hold a program or nothing that can be played. It does not recognise an advert or a fake that holds a video of its own. Leaving those alone is up to the AI model, and two of the models compared under "Choosing a model" took one every time.
 - An admin chooses the folders downloads are saved into, and may enter any folder qBittorrent can write to. Make someone an admin only if you would trust them with qBittorrent itself.
-- `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image.
+- `.env` holds your Jackett key, qBittorrent password and Plex token in plain text. Keep the file private; it is excluded from git and from the Docker image. With everything run at once, `vpn.env` holds your VPN login, and the same goes for it.
 - With the catalogue on, the titles and names people ask about are sent to Wikidata, Wikipedia and TVmaze. Who asked is not.
 
 ## Managing people

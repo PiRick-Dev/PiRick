@@ -5,3 +5,4 @@ data/
 *.db-shm
 *.db-wal
 bench/results/
+vpn.env
